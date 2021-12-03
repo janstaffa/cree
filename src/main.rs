@@ -5,8 +5,11 @@ use clap::App;
 use clap::Arg;
 use clap::SubCommand;
 
+use cree::CreeOptions;
 use cree::CreeServer;
 use hyper::Server;
+use std::fs;
+use toml::Value;
 
 #[tokio::main]
 async fn main() {
@@ -31,6 +34,7 @@ async fn main() {
                 ),
         )
         .get_matches();
+
     if let Some(matches) = matches.subcommand_matches("start") {
         let port: u16 = matches.value_of("port").unwrap_or("80").parse().unwrap();
         let path = matches.value_of("path").unwrap().to_owned();
