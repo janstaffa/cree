@@ -11,6 +11,7 @@ use std::{
 };
 use tokio::fs::File;
 use tokio_util::codec::{BytesCodec, FramedRead};
+use uuid::Uuid;
 
 static NOTFOUND: &[u8] = b"Not Found";
 static SERVERERROR: &[u8] = b"Internal server error";
@@ -56,13 +57,28 @@ impl CreeService {
             let mut final_path = path;
             if extension == "php" {
                 let php_path = &self.options.php_path;
+                let tmp_dir = std::env::temp_dir();
+
                 if let Some(php_path) = php_path {
-                    let php_result = Command::new(php_path)
+                    let tmp_php_path = tmp_dir.join(uuid::Uuid::new_v4().to_string() + ".php");
+                    {
+                        let mut tmp_php = fs::File::create(&tmp_php_path).unwrap();
+                        let mut php_content = fs::read(&final_path).unwrap();
+                        let include_abs_path =
+                            std::env::current_dir().unwrap().join("include/include.php");
+                        let include_str = format!(
+                            "<?php include_once('{}'); ?>\n",
+                            &include_abs_path.display()
+                        );
+                        let include = include_str.as_bytes();
+                        php_content.splice(..0, include.iter().cloned());
+                        tmp_php.write(&php_content).unwrap();
+                    }
+                    let php_result = Command::new(&php_path)
                         .arg("-q")
-                        .arg(&final_path)
+                        .arg(&tmp_php_path)
                         .output()
-                        .expect("ls command failed to start");
-                    let tmp_dir = std::env::temp_dir();
+                        .expect("php interpreter failed");
                     let tmp_path = tmp_dir.to_path_buf().join(filename + ".html");
                     let mut tmp_file = fs::File::create(&tmp_path).unwrap();
                     tmp_file.write(&php_result.stdout).unwrap();
@@ -136,6 +152,23 @@ impl CreeServer {
         let conf_file = fs::read(PathBuf::from("cree.toml"));
         if let Ok(f) = conf_file {
             options = toml::from_slice::<CreeOptions>(&f).unwrap();
+            if let Some(php_path) = &options.php_path {
+                let mut include_file = fs::File::create("include/include.php").unwrap();
+                let content = "<?php\n\
+                  $_SERVER['PHP_SELF'] = 'test';\n\
+                  $_SERVER['REMOTE_ADDR'] = '192.168.1.2';\n\
+                  $_SERVER['REQUEST_URI'] = '/test.php';\n\
+                  $_SERVER['GATEWAY_INTERFACE'] = 'CGI/1.1';\n\
+                  $_SERVER['SERVER_ADDR'] = '78.80.80.214';\n\
+                  $_SERVER['HTTP_HOST'] = 'janstaffa.cz';\n\
+                  $_SERVER['SERVER_NAME'] = 'janstaffa.cz';\n\
+                  $_SERVER['SERVER_SOFTWARE'] = 'Cree';\n\
+                  $_SERVER['SERVER_PROTOCOL'] = 'HTTP/1.0';\n\
+                  $_SERVER['REQUEST_METHOD'] = 'GET';\n\
+                  $_SERVER['DOCUMENT_ROOT'] = 'www';\n\
+                  $_SERVER['HTTPS'] = '';";
+                include_file.write(content.as_bytes()).unwrap();
+            }
         } else {
             println!("No cree conf file found.");
         }
