@@ -1,0 +1,3 @@
+# Example cree configuration file
+enable_php = true
+php_path = "C:\\php\\php-cgi.exe"
