@@ -23,11 +23,16 @@ pub struct FileMeta {
    pub name: String,
    pub extension: String,
 }
-pub fn get_file_meta(path: &PathBuf) -> Result<FileMeta, String> {
+
+pub fn hello_world() {
+   println!("Hello world!");
+}
+
+pub fn get_file_meta(path: &PathBuf) -> Result<FileMeta, Error> {
    let name = path
       .file_stem()
       .and_then(OsStr::to_str)
-      .ok_or("Invalid file name")?
+      .ok_or(Error::new("Invalid file name"))?
       .to_owned();
    let extension = path
       .extension()
@@ -51,9 +56,15 @@ pub fn get_file_meta(path: &PathBuf) -> Result<FileMeta, String> {
    Ok(meta)
 }
 
-pub async fn write_to_stream(stream: &mut BufReader<TcpStream>, data: &[u8]) -> Result<(), String> {
-   if let Err(_) = stream.write_all(data).await {
-      return Err(String::from("Failed to write data to the stream."));
+#[derive(Debug)]
+pub struct Error {
+   msg: String,
+}
+
+impl Error {
+   pub fn new(msg: &str) -> Error {
+      Error {
+         msg: msg.to_owned(),
+      }
    }
-   Ok(())
 }

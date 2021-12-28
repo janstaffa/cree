@@ -1,4 +1,5 @@
 use super::service::CreeService;
+use cree::Error;
 
 use crate::CreeOptions;
 use std::fs;
@@ -12,7 +13,7 @@ pub struct CreeServer {
    options: CreeOptions,
 }
 impl CreeServer {
-   pub async fn bind(addr: SocketAddr, root_dir: PathBuf) -> Result<(), String> {
+   pub async fn bind(addr: SocketAddr, root_dir: PathBuf) -> Result<(), Error> {
       let mut options = CreeOptions::get_default();
       let conf_file = fs::read(PathBuf::from("cree.toml"));
       if let Ok(f) = conf_file {

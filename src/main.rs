@@ -19,18 +19,18 @@ async fn main() {
       .subcommand(
          SubCommand::with_name("start")
             .arg(
-               Arg::new("path")
-                  .short('p')
+               Arg::with_name("path")
+                  .short("p")
                   .long("path")
                   .takes_value(true)
-                  .about("Path to the folder you want to serve")
+                  // .about("Path to the folder you want to serve")
                   .required(true),
             )
             .arg(
-               Arg::new("port")
+               Arg::with_name("port")
                   .long("port")
                   .takes_value(true)
-                  .about("Port to serve on (default: 80)")
+                  // .about("Port to serve on (default: 80)")
                   .required(false),
             ),
       )
