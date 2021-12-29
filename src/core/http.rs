@@ -1,4 +1,6 @@
+use crate::core::codes::get_code_from_status;
 use crate::core::codes::HTTPStatus;
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
@@ -7,7 +9,7 @@ use futures::lock::Mutex;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 #[derive(Debug)]
@@ -57,6 +59,27 @@ impl Connection {
       self.is_alive = false;
       Ok(())
    }
+
+   pub async fn read_all(&mut self, buf: &mut Vec<u8>) -> Result<(), Error> {
+      const BUFFER_SIZE: usize = 128;
+      loop {
+         let mut buffer = [0; BUFFER_SIZE];
+         match self.stream.read(&mut buffer).await {
+            Ok(len) => {
+               if len == 0 {
+                  break;
+               }
+
+               *buf = [buf.to_owned(), buffer.to_vec()].concat();
+               if len < BUFFER_SIZE {
+                  break;
+               }
+            }
+            Err(_) => return Err(Error::new("Error reading the stream.")),
+         }
+      }
+      Ok(())
+   }
 }
 #[derive(Debug)]
 pub struct Request<'a> {
@@ -67,42 +90,48 @@ pub struct Request<'a> {
    pub body: String,
    pub query: String,
    pub http_info: String,
+   pub headers: Headers,
 }
 
 impl<'a> Request<'a> {
    pub async fn new(connection: &'a Mutex<Connection>) -> Result<Request<'a>, Error> {
-      let mut req_data = String::new();
-      let mut conn = connection.lock().await;
-      if let Err(_) = conn.stream.read_line(&mut req_data).await {
-         return Err(Error::new("Failed to read request."));
-      };
+      let mut conn = connection
+         .try_lock()
+         .ok_or(Error::new("Couldn't aquire a lock over response stream."))?;
+      let mut req_data: Vec<u8> = vec![];
+      conn.read_all(&mut req_data).await?;
 
+      let req_data = String::from_utf8(req_data.to_vec()).unwrap();
       let ParsedRequest {
          method,
          uri,
          path,
          query,
          http_info,
+         body,
+         headers,
       } = parse_request(&req_data)?;
       let req = Request {
          connection,
          method: method,
          path,
          uri,
-         body: req_data,
+         body,
          query: query,
          http_info: http_info,
+         headers,
       };
       Ok(req)
    }
 }
 
+type Headers = HashMap<String, String>;
 #[derive(Debug)]
 pub struct Response<'a> {
    pub connection: &'a Mutex<Connection>,
    pub req: Arc<Request<'a>>,
    fulfilled: bool,
-   headers: HashMap<String, String>,
+   headers: Headers,
 }
 
 impl<'a> Response<'a> {
@@ -154,11 +183,13 @@ impl<'a> Response<'a> {
          .ok_or(Error::new("Couldn't aquire a lock over response stream."))?;
       let writable_stream = &mut conn.stream;
 
-      let headers = [
-         "HTTP/1.1 200 OK\n".as_bytes(),
-         self.get_headers().as_bytes(),
-      ]
-      .concat();
+      let code = get_code_from_status(&status_code).ok_or(Error::new(&format!(
+         "Invalid status code: {:?}.",
+         &status_code
+      )))?;
+
+      let http_header = format!("HTTP/1.1 {} {}\n", code.0, code.1);
+      let headers = [http_header.as_bytes(), self.get_headers().as_bytes()].concat();
 
       let data = [&headers, data].concat();
 
@@ -188,14 +219,40 @@ struct ParsedRequest {
    path: String,
    http_info: String,
    query: String,
+   body: String,
+   headers: Headers,
 }
 fn parse_request(req: &str) -> Result<ParsedRequest, Error> {
-   let split: Vec<&str> = req.split_whitespace().collect();
+   let req = req.trim();
+   let req = req.replace("\r", "");
 
-   if split.len() < 3 {
+   let parts: Vec<&str> = req.split("\n\n").collect();
+   if parts.len() == 0 {
+      return Err(Error::new("Invalid request"));
+   }
+   let head: Vec<&str> = parts[0].lines().collect();
+   if head.len() < 1 {
+      return Err(Error::new("Invalid request"));
+   }
+   let request_line: Vec<&str> = head[0].split_whitespace().collect();
+
+   let raw_headers = &head[1..];
+   let mut headers: Headers = HashMap::new();
+   if raw_headers.len() > 0 {
+      for header in raw_headers {
+         let parts: Vec<&str> = header.split(":").collect();
+         if parts.len() != 2 {
+            continue;
+         }
+
+         headers.insert(parts[0].trim().to_owned(), parts[1].trim().to_owned());
+      }
+   }
+
+   if request_line.len() < 3 {
       return Err(Error::new("Invalid request."));
    }
-   let method: Method = match split[0] {
+   let method: Method = match request_line[0] {
       "GET" => Method::GET,
       "POST" => Method::POST,
       _ => {
@@ -203,7 +260,7 @@ fn parse_request(req: &str) -> Result<ParsedRequest, Error> {
       }
    };
 
-   let uri = split[1];
+   let uri = request_line[1];
    let query: &str = if uri.contains("?") {
       let split: Vec<&str> = uri.split("?").collect();
 
@@ -220,8 +277,14 @@ fn parse_request(req: &str) -> Result<ParsedRequest, Error> {
       method,
       uri: uri.to_owned(),
       path,
-      http_info: String::from(split[2]),
+      http_info: String::from(request_line[2]),
       query: query.to_owned(),
+      body: if parts.len() == 2 {
+         parts[1].to_owned()
+      } else {
+         String::from("")
+      },
+      headers,
    };
    Ok(parsed)
 }

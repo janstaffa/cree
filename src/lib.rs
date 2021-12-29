@@ -24,10 +24,6 @@ pub struct FileMeta {
    pub extension: String,
 }
 
-pub fn hello_world() {
-   println!("Hello world!");
-}
-
 pub fn get_file_meta(path: &PathBuf) -> Result<FileMeta, Error> {
    let name = path
       .file_stem()

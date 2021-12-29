@@ -42,7 +42,7 @@ impl CreeService {
       let connection = Mutex::new(Connection::new(socket));
       let (req, mut res) = construct_http_interface(&connection).await;
 
-      if let Method::GET = req.method {
+      if let Method::GET | Method::POST = req.method {
          let concatinated = format!("{}{}", self.root_dir.display(), req.path);
          let final_path = PathBuf::from(&concatinated);
          let abs_root_path = self.root_dir.canonicalize().unwrap();
@@ -92,7 +92,10 @@ impl<'a> Response<'a> {
       self.set_header("hello", "this is a test ");
       let file_meta = get_file_meta(&path)?;
       let FileMeta { extension, .. } = file_meta;
-      let connection = self.connection.lock().await;
+      let connection = self
+         .connection
+         .try_lock()
+         .ok_or(Error::new("Couldn't aquire a lock over response stream."))?;
       if extension == "php" {
          if let Some(php_handle) = php_handle {
             let variables = PHPVariables {
@@ -117,7 +120,8 @@ impl<'a> Response<'a> {
       if let Ok(file) = fs::read(&path) {
          std::mem::drop(connection);
          self.write(&file, HTTPStatus::Ok).await.unwrap();
+         return Ok(());
       }
-      Ok(())
+      Err(Error::new("Something went wrong."))
    }
 }

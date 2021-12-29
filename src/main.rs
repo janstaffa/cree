@@ -53,7 +53,7 @@ async fn main() {
    }
 }
 
-// TODO: add generic CreeError type which all Result's return
+// TODO: don't give Connection to Request(give the read data instead)
 // TODO: store php include file in temp
 // TODO: add logging option to CreeServer
 // TODO: remove CreeServer struct
