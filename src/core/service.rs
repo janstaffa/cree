@@ -42,38 +42,43 @@ impl CreeService {
       let connection = Mutex::new(Connection::new(socket));
       let (req, mut res) = construct_http_interface(&connection).await;
 
-      if let Method::GET | Method::POST = req.method {
-         let concatinated = format!("{}{}", self.root_dir.display(), req.path);
-         let final_path = PathBuf::from(&concatinated);
-         let abs_root_path = self.root_dir.canonicalize().unwrap();
-         if !final_path.exists()
-            || !final_path
-               .canonicalize()
-               .unwrap()
-               .starts_with(abs_root_path)
-         {
-            res.write(NOT_FOUND.as_bytes(), HTTPStatus::NotFound)
-               .await
-               .unwrap();
-            return Ok(());
-         }
-         if final_path.is_dir() {
-            let dir_files = fs::read_dir(&final_path).unwrap();
-            for file in dir_files {
-               let file = file.unwrap();
-               if file.file_name() == "index.html" {
-                  res.send_file(file.path(), &self.php_handle, &self.root_dir)
-                     .await
-                     .unwrap();
-                  return Ok(());
-               }
+      match req.method {
+         Method::GET | Method::POST => {
+            let concatinated = format!("{}{}", self.root_dir.display(), req.path);
+            let final_path = PathBuf::from(&concatinated);
+            let abs_root_path = self.root_dir.canonicalize().unwrap();
+            if !final_path.exists()
+               || !final_path
+                  .canonicalize()
+                  .unwrap()
+                  .starts_with(abs_root_path)
+            {
+               res.write(NOT_FOUND.as_bytes(), HTTPStatus::NotFound)
+                  .await
+                  .unwrap();
+               return Ok(());
             }
-         } else if final_path.is_file() {
-            res.send_file(final_path, &self.php_handle, &self.root_dir)
-               .await
-               .unwrap();
-            return Ok(());
+            if final_path.is_dir() {
+               let dir_files = fs::read_dir(&final_path).unwrap();
+               for file in dir_files {
+                  let file = file.unwrap();
+                  let path = file.path();
+                  let FileMeta { name, extension } = get_file_meta(&path)?;
+                  if name == "index" && extension != None {
+                     res.send_file(file.path(), &self.php_handle, &self.root_dir)
+                        .await
+                        .unwrap();
+                     return Ok(());
+                  }
+               }
+            } else if final_path.is_file() {
+               res.send_file(final_path, &self.php_handle, &self.root_dir)
+                  .await
+                  .unwrap();
+               return Ok(());
+            }
          }
+         Method::HEAD => {}
       }
 
       res.write(NOT_FOUND.as_bytes(), HTTPStatus::NotFound)
@@ -89,14 +94,13 @@ impl<'a> Response<'a> {
       php_handle: &Option<PHP>,
       root_path: &PathBuf,
    ) -> Result<(), Error> {
-      self.set_header("hello", "this is a test ");
       let file_meta = get_file_meta(&path)?;
       let FileMeta { extension, .. } = file_meta;
       let connection = self
          .connection
          .try_lock()
          .ok_or(Error::new("Couldn't aquire a lock over response stream."))?;
-      if extension == "php" {
+      if let Some("php") = extension {
          if let Some(php_handle) = php_handle {
             let variables = PHPVariables {
                request_method: String::from("GET"),

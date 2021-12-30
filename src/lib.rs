@@ -19,35 +19,18 @@ impl CreeOptions {
    }
 }
 
-pub struct FileMeta {
-   pub name: String,
-   pub extension: String,
+pub struct FileMeta<'b> {
+   pub name: &'b str,
+   pub extension: Option<&'b str>,
 }
 
-pub fn get_file_meta(path: &PathBuf) -> Result<FileMeta, Error> {
+pub fn get_file_meta<'a>(path: &'a PathBuf) -> Result<FileMeta<'a>, Error> {
    let name = path
       .file_stem()
       .and_then(OsStr::to_str)
-      .ok_or(Error::new("Invalid file name"))?
-      .to_owned();
-   let extension = path
-      .extension()
-      .and_then(OsStr::to_str)
-      .unwrap_or("")
-      .to_owned();
+      .ok_or(Error::new("Invalid file name"))?;
+   let extension = path.extension().and_then(OsStr::to_str);
 
-   // let file_name = path
-   //    .file_name()
-   //    .ok_or("Invalid file name.")?
-   //    .to_str()
-   //    .ok_or("Invalid file name.")?;
-   // let split: Vec<&str> = file_name.split('.').collect();
-   // let len = split.len();
-   // if len < 2 {
-   //    return Err(String::from("Invalid file name."));
-   // }
-   // let name = split[..len - 1].join("");
-   // let extension = split[len - 1].to_owned();
    let meta = FileMeta { name, extension };
    Ok(meta)
 }

@@ -15,6 +15,7 @@ use tokio::net::TcpStream;
 #[derive(Debug)]
 pub enum Method {
    GET,
+   HEAD,
    POST,
 }
 
