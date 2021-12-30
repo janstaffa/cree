@@ -49,7 +49,7 @@ async fn main() {
       println!("Listening on {}", addr);
 
       let server = server::CreeServer::bind(addr, PathBuf::from(path));
-      server.await;
+      server.await.unwrap();
    }
 }
 

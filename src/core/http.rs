@@ -190,8 +190,6 @@ impl<'a> Response<'a> {
       )))?;
       let http_header = format!("HTTP/1.1 {} {}\n", code.0, code.1);
 
-      self.set_header("Connection", "close");
-      self.set_header("Server", "Cree");
       let date = Utc::now().format("%a, %d %b %Y %T %Z");
       let date = format!("{}", date);
       self.set_header("Date", &date);

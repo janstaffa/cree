@@ -43,6 +43,14 @@ impl CreeService {
       let connection = Mutex::new(Connection::new(socket));
       let (req, mut res) = construct_http_interface(&connection).await;
 
+      res.set_header("Connection", "close");
+      res.set_header("Server", "Cree");
+      if let Some(headers) = &self.options.headers {
+         if let Some(csp) = &headers.content_security_policy {
+            res.set_header("Content-Security-Policy", csp);
+         }
+      }
+
       let concatinated = format!("{}{}", self.root_dir.display(), req.path);
       let final_path = PathBuf::from(&concatinated);
       let abs_root_path = self.root_dir.canonicalize().unwrap();

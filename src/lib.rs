@@ -6,15 +6,21 @@ use tokio::io::BufReader;
 use tokio::net::TcpStream;
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct Headers {
+   pub content_security_policy: Option<String>,
+}
+#[derive(Debug, Deserialize, Clone)]
 pub struct CreeOptions {
    pub enable_php: Option<bool>,
    pub php_path: Option<PathBuf>,
+   pub headers: Option<Headers>,
 }
 impl CreeOptions {
    pub fn get_default() -> CreeOptions {
       CreeOptions {
          enable_php: Some(false),
          php_path: None,
+         headers: None,
       }
    }
 }
