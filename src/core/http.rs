@@ -190,11 +190,19 @@ impl<'a> Response<'a> {
       )))?;
 
       let http_header = format!("HTTP/1.1 {} {}\n", code.0, code.1);
-      let headers = [http_header.as_bytes(), self.get_headers().as_bytes()].concat();
+      let headers = [http_header.as_bytes(), self.get_headers().as_bytes(), b"\n"].concat();
 
-      let data = [&headers, data].concat();
+      let mut final_data: Vec<u8> = vec![];
+      match self.req.method {
+         Method::HEAD => {
+            final_data = headers;
+         }
+         _ => {
+            final_data = [&headers, data].concat();
+         }
+      }
 
-      if let Err(_) = writable_stream.write_all(&data).await {
+      if let Err(_) = writable_stream.write_all(&final_data).await {
          conn.close().await?;
          return Err(Error::new("Failed to write data to the stream."));
       }
@@ -255,6 +263,7 @@ fn parse_request(req: &str) -> Result<ParsedRequest, Error> {
    }
    let method: Method = match request_line[0] {
       "GET" => Method::GET,
+      "HEAD" => Method::HEAD,
       "POST" => Method::POST,
       _ => {
          return Err(Error::new("Invalid request method."));
