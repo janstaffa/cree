@@ -4,6 +4,7 @@ use crate::core::codes::HTTPStatus;
 use crate::core::http::construct_http_interface;
 use crate::core::http::Connection;
 use crate::core::http::Response;
+use crate::core::mime::get_mime_type;
 use crate::extensions::php::PHPVariables;
 use crate::extensions::php::{PHPOptions, PHP};
 use cree::CreeOptions;
@@ -62,11 +63,15 @@ impl CreeService {
             let file = file.unwrap();
             let path = file.path();
             let FileMeta { name, extension } = get_file_meta(&path)?;
-            if name == "index" && matches!(extension, Some("html" | "htm" | "php")) {
-               res.send_file(file.path(), &self.php_handle, &self.root_dir)
-                  .await
-                  .unwrap();
-               return Ok(());
+            if name == "index" {
+               if let Some(extension) = extension {
+                  if let "html" | "htm" | "php" = &extension[..] {
+                     res.send_file(file.path(), &self.php_handle, &self.root_dir)
+                        .await
+                        .unwrap();
+                     return Ok(());
+                  }
+               }
             }
          }
       } else if final_path.is_file() {
@@ -89,37 +94,42 @@ impl<'a> Response<'a> {
       php_handle: &Option<PHP>,
       root_path: &PathBuf,
    ) -> Result<(), Error> {
-      self.set_header("test_header_1", "Some-Value");
-      self.set_header("test_header_2", "Other-Value");
       let file_meta = get_file_meta(&path)?;
       let FileMeta { extension, .. } = file_meta;
       let connection = self
          .connection
          .try_lock()
          .ok_or(Error::new("Couldn't aquire a lock over response stream."))?;
-      if let Some("php") = extension {
-         if let Some(php_handle) = php_handle {
-            let variables = PHPVariables {
-               request_method: String::from("GET"),
-               remote_addr: format!("{:?}", connection.remote_address.ip()),
-               query_string: self.req.query.clone(),
-               document_root: String::from(root_path.to_str().unwrap()),
-               request_protocol: self.req.http_info.clone(),
-               request_uri: self.req.uri.clone(),
-               http_host: String::new(),
-            };
-            let data = php_handle.execute(&path, &variables).await?;
+      if let Some(extension) = &extension {
+         if extension == "php" {
+            if let Some(php_handle) = php_handle {
+               let variables = PHPVariables {
+                  request_method: String::from("GET"),
+                  remote_addr: format!("{:?}", connection.remote_address.ip()),
+                  query_string: self.req.query.clone(),
+                  document_root: String::from(root_path.to_str().unwrap()),
+                  request_protocol: self.req.http_info.clone(),
+                  request_uri: self.req.uri.clone(),
+                  http_host: String::new(),
+               };
+               let data = php_handle.execute(&path, &variables).await?;
 
-            std::mem::drop(connection);
-            self.write(&data, HTTPStatus::Ok).await.unwrap();
+               std::mem::drop(connection);
+               self.set_header("Content-Type", "text/html");
+               self.write(&data, HTTPStatus::Ok).await.unwrap();
 
-            return Ok(());
-         } else {
-            return Err(Error::new("Invalid PHP configuration."));
+               return Ok(());
+            } else {
+               return Err(Error::new("Invalid PHP configuration."));
+            }
          }
       }
       if let Ok(file) = fs::read(&path) {
          std::mem::drop(connection);
+
+         let ext = extension.unwrap_or_default();
+         let media_type = get_mime_type(&ext);
+         self.set_header("Content-Type", &media_type);
          self.write(&file, HTTPStatus::Ok).await.unwrap();
          return Ok(());
       }

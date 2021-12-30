@@ -21,7 +21,7 @@ impl CreeOptions {
 
 pub struct FileMeta<'b> {
    pub name: &'b str,
-   pub extension: Option<&'b str>,
+   pub extension: Option<String>,
 }
 
 pub fn get_file_meta<'a>(path: &'a PathBuf) -> Result<FileMeta<'a>, Error> {
@@ -31,6 +31,11 @@ pub fn get_file_meta<'a>(path: &'a PathBuf) -> Result<FileMeta<'a>, Error> {
       .ok_or(Error::new("Invalid file name"))?;
    let extension = path.extension().and_then(OsStr::to_str);
 
+   let extension = if let Some(ext) = extension {
+      Some(ext.to_lowercase())
+   } else {
+      None
+   };
    let meta = FileMeta { name, extension };
    Ok(meta)
 }

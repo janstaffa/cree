@@ -188,8 +188,14 @@ impl<'a> Response<'a> {
          "Invalid status code: {:?}.",
          &status_code
       )))?;
-
       let http_header = format!("HTTP/1.1 {} {}\n", code.0, code.1);
+
+      self.set_header("Connection", "close");
+      self.set_header("Server", "Cree");
+      let date = Utc::now().format("%a, %d %b %Y %T %Z");
+      let date = format!("{}", date);
+      self.set_header("Date", &date);
+
       let headers = [http_header.as_bytes(), self.get_headers().as_bytes(), b"\n"].concat();
 
       let mut final_data: Vec<u8> = vec![];
@@ -206,8 +212,8 @@ impl<'a> Response<'a> {
          conn.close().await?;
          return Err(Error::new("Failed to write data to the stream."));
       }
-
       self.fulfilled = true;
+      conn.close().await?;
       Ok(())
    }
 }
