@@ -112,7 +112,10 @@ impl<'a> Response<'a> {
          if extension == "php" {
             if let Some(php_handle) = php_handle {
                let variables = PHPVariables {
-                  request_method: String::from("GET"),
+                  request_method: self.req.method.to_string(),
+                  post_data: String::from("test=1\n"),
+                  content_length: String::from("6"),
+                  content_type: String::from("application/x-www-form-urlencoded"),
                   remote_addr: format!("{:?}", connection.remote_address.ip()),
                   query_string: self.req.query.clone(),
                   document_root: String::from(root_path.to_str().unwrap()),

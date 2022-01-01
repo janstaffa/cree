@@ -19,6 +19,11 @@ pub enum Method {
    POST,
 }
 
+impl Method {
+   pub fn to_string(&self) -> String {
+      format!("{:?}", self)
+   }
+}
 #[derive(Debug)]
 pub struct Connection {
    pub stream: BufReader<TcpStream>,

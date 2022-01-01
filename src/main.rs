@@ -53,6 +53,7 @@ async fn main() {
    }
 }
 
+// TODO: REDIRECT_STATUS should be dynamic (200, 400, 500,...)
 // TODO: don't give Connection to Request(give the read data instead)
 // TODO: store php include file in temp
 // TODO: add logging option to CreeServer

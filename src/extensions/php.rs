@@ -1,6 +1,7 @@
 use cree::Error;
+use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 #[derive(Clone, Debug)]
 pub struct PHP {
@@ -13,6 +14,9 @@ pub struct PHPOptions {
 
 pub struct PHPVariables {
    pub request_method: String,
+   pub post_data: String,
+   pub content_type: String,
+   pub content_length: String,
    pub remote_addr: String,
    pub query_string: String,
    pub document_root: String,
@@ -32,10 +36,8 @@ impl PHP {
    }
 
    pub async fn execute(&self, path: &PathBuf, variables: &PHPVariables) -> Result<Vec<u8>, Error> {
-      let mut php_result = Command::new(&self.interpreter_path);
-      php_result.arg("-q");
-      php_result
-         .env("REDIRECT_STATUS", "200")
+      let mut cmd = Command::new(&self.interpreter_path);
+      cmd.env("REDIRECT_STATUS", "true")
          .env("REQUEST_METHOD", &variables.request_method)
          .env("SCRIPT_FILENAME", path)
          .env("SCRIPT_NAME", path.file_name().unwrap())
@@ -46,10 +48,36 @@ impl PHP {
          .env("REMOTE_ADDR", &variables.remote_addr)
          .env("DOCUMENT_ROOT", &variables.document_root)
          .env("QUERY_STRING", &variables.query_string)
+         .env("CONTENT_LENGTH", &variables.content_length)
+         .env("CONTENT_TYPE", &variables.content_type) //"application/x-www-form-urlencoded")
          .env("HTTP_HOST", &variables.http_host);
-      let result = php_result
-         .output()
-         .or(Err(Error::new("PHP interpreter failed.")))?;
-      return Ok(result.stdout);
+
+      if variables.request_method == "POST" {
+         let process = match cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn() {
+            Err(why) => return Err(Error::new(&format!("Couldn't spawn php: {}", why))),
+            Ok(process) => process,
+         };
+
+         if let Err(e) = process
+            .stdin
+            .unwrap()
+            .write_all(&variables.post_data.as_bytes())
+         {
+            return Err(Error::new(&format!("Couldn't write to php stdin: {}", e)));
+         }
+
+         let mut s: Vec<u8> = Vec::new();
+         match process.stdout.unwrap().read_to_end(&mut s) {
+            Err(e) => Err(Error::new(&format!("Couldn't read php stdout: {}", e))),
+            Ok(_) => Ok(s),
+         }
+      } else {
+         let output = match cmd.output() {
+            Err(e) => return Err(Error::new(&format!("Couldn't read php stdout: {}", e))),
+            Ok(r) => r,
+         };
+
+         Ok(output.stdout)
+      }
    }
 }
