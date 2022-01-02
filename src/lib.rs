@@ -34,7 +34,7 @@ pub fn get_file_meta<'a>(path: &'a PathBuf) -> Result<FileMeta<'a>, Error> {
    let name = path
       .file_stem()
       .and_then(OsStr::to_str)
-      .ok_or(Error::new("Invalid file name"))?;
+      .ok_or(Error::new("Invalid file name", 1001))?;
    let extension = path.extension().and_then(OsStr::to_str);
 
    let extension = if let Some(ext) = extension {
@@ -48,13 +48,15 @@ pub fn get_file_meta<'a>(path: &'a PathBuf) -> Result<FileMeta<'a>, Error> {
 
 #[derive(Debug)]
 pub struct Error {
-   msg: String,
+   pub msg: String,
+   pub code: u32,
 }
 
 impl Error {
-   pub fn new(msg: &str) -> Error {
+   pub fn new(msg: &str, code: u32) -> Error {
       Error {
          msg: msg.to_owned(),
+         code,
       }
    }
 }

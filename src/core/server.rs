@@ -18,7 +18,7 @@ impl CreeServer {
       let conf_file = fs::read(PathBuf::from("cree.toml"));
       if let Ok(f) = conf_file {
          options = toml::from_slice::<CreeOptions>(&f)
-            .or(Err(Error::new("Failed to read configuration file.")))?;
+            .or(Err(Error::new("Failed to read configuration file.", 1005)))?;
       } else {
          println!("No cree conf file found.");
       }

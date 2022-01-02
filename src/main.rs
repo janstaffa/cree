@@ -53,14 +53,11 @@ async fn main() {
    }
 }
 
-// TODO: REDIRECT_STATUS should be dynamic (200, 400, 500,...)
-// TODO: don't give Connection to Request(give the read data instead)
-// TODO: store php include file in temp
+// TODO: Add custom error page option to cree.toml.
+// TODO: REDIRECT_STATUS in php should be dynamic (200, 400, 500,...)
 // TODO: add logging option to CreeServer
 // TODO: remove CreeServer struct
-// TODO: properly include env variables in php
-// TODO: add .htaccess support
 // TODO: HTTPS
 // TODO: add more options to 'cree.toml'
 // TODO: change all Vec<u8> to Bytes
-// TODO: close response stream after writing to it
+// TODO: add partial content streaming.

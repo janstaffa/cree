@@ -2,7 +2,6 @@ use super::codes::NOT_FOUND;
 use super::http::Method;
 use crate::core::codes::HTTPStatus;
 use crate::core::http::construct_http_interface;
-use crate::core::http::Connection;
 use crate::core::http::Response;
 use crate::core::mime::get_mime_type;
 use crate::extensions::php::PHPVariables;
@@ -40,8 +39,10 @@ impl CreeService {
       Ok(service)
    }
    pub async fn handle_request(&self, socket: TcpStream) -> Result<(), Error> {
-      let connection = Mutex::new(Connection::new(socket));
-      let (req, mut res) = construct_http_interface(&connection).await;
+      // let (mut read, mut write) = tokio::io::split(socket);
+      // let connection = Connection::new(socket);
+      let (req, mut res) = construct_http_interface(socket).await?;
+      // println!("req {:?}", req);
 
       res.set_header("Connection", "close");
       res.set_header("Server", "Cree");
@@ -60,7 +61,7 @@ impl CreeService {
             .unwrap()
             .starts_with(abs_root_path)
       {
-         res.write(NOT_FOUND.as_bytes(), HTTPStatus::NotFound)
+         res.write_response(NOT_FOUND.as_bytes(), HTTPStatus::NotFound, true)
             .await
             .unwrap();
          return Ok(());
@@ -89,13 +90,13 @@ impl CreeService {
          return Ok(());
       }
 
-      res.write(NOT_FOUND.as_bytes(), HTTPStatus::NotFound)
+      res.write_response(NOT_FOUND.as_bytes(), HTTPStatus::NotFound, true)
          .await
          .unwrap();
       Ok(())
    }
 }
-impl<'a> Response<'a> {
+impl Response {
    pub async fn send_file(
       &mut self,
       path: PathBuf,
@@ -104,46 +105,46 @@ impl<'a> Response<'a> {
    ) -> Result<(), Error> {
       let file_meta = get_file_meta(&path)?;
       let FileMeta { extension, .. } = file_meta;
-      let connection = self
-         .connection
-         .try_lock()
-         .ok_or(Error::new("Couldn't aquire a lock over response stream."))?;
+
       if let Some(extension) = &extension {
          if extension == "php" {
             if let Some(php_handle) = php_handle {
                let variables = PHPVariables {
-                  request_method: self.req.method.to_string(),
-                  post_data: String::from("test=1\n"),
-                  content_length: String::from("6"),
-                  content_type: String::from("application/x-www-form-urlencoded"),
-                  remote_addr: format!("{:?}", connection.remote_address.ip()),
-                  query_string: self.req.query.clone(),
-                  document_root: String::from(root_path.to_str().unwrap()),
-                  request_protocol: self.req.http_info.clone(),
-                  request_uri: self.req.uri.clone(),
-                  http_host: String::new(),
+                  request_method: &self.req.method.to_string().unwrap(),
+                  post_data: Some(&self.req.body),
+                  content_length: Some(self.req.body.as_bytes().len()),
+                  content_type: self.req.headers.get("content-type"),
+                  remote_addr: &format!("{:?}", self.req.remote_address.ip()),
+                  query_string: &self.req.query,
+                  document_root: root_path.to_str().unwrap(),
+                  request_protocol: &self.req.http_info,
+                  request_uri: &self.req.uri,
+                  http_host: "",
                };
                let data = php_handle.execute(&path, &variables).await?;
 
-               std::mem::drop(connection);
                self.set_header("Content-Type", "text/html");
-               self.write(&data, HTTPStatus::Ok).await.unwrap();
+               self
+                  .write_response(&data, HTTPStatus::Ok, false)
+                  .await
+                  .unwrap();
 
                return Ok(());
             } else {
-               return Err(Error::new("Invalid PHP configuration."));
+               return Err(Error::new("Invalid PHP configuration.", 3000));
             }
          }
       }
       if let Ok(file) = fs::read(&path) {
-         std::mem::drop(connection);
-
          let ext = extension.unwrap_or_default();
          let media_type = get_mime_type(&ext);
          self.set_header("Content-Type", &media_type);
-         self.write(&file, HTTPStatus::Ok).await.unwrap();
+         self
+            .write_response(&file, HTTPStatus::Ok, true)
+            .await
+            .unwrap();
          return Ok(());
       }
-      Err(Error::new("Something went wrong."))
+      Err(Error::new("Something went wrong.", 1000))
    }
 }
