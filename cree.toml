@@ -1,6 +1,9 @@
 # Example cree configuration file
+root_directory = "./www"
+
 enable_php = true
 php_path = "C:\\php\\php-cgi.exe"
+
 
 [headers]
 content_security_policy = "default-src 'self'"
