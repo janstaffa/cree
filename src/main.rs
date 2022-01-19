@@ -111,7 +111,15 @@ async fn main() {
 
                         let res = service.create_response(req).await.unwrap();
 
-                        tcp_connection.write_response(res, true).await.unwrap();
+                        let use_compression = if let Some(uc) = options.use_compression {
+                            uc
+                        } else {
+                            false
+                        };
+                        tcp_connection
+                            .write_response(res, use_compression)
+                            .await
+                            .unwrap();
                     }
                     tcp_connection.close().await.unwrap();
                     //   println!("connection closed");

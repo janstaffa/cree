@@ -51,20 +51,17 @@ impl CreeService {
         }
 
         let concatinated = format!("{}{}", self.root_dir.display(), response.req.path);
-        let final_path = PathBuf::from(&concatinated);
+        let path = PathBuf::from(&concatinated);
         let abs_root_path = self.root_dir.canonicalize().unwrap();
-        if !final_path.exists()
-            || !final_path
-                .canonicalize()
-                .unwrap()
-                .starts_with(abs_root_path)
-        {
+        if !path.exists() || !path.canonicalize().unwrap().starts_with(abs_root_path) {
             response.set_status(HTTPStatus::NotFound);
             response.write(NOT_FOUND.as_bytes().to_vec());
             return Ok(response);
         }
-        if final_path.is_dir() {
-            let dir_files = fs::read_dir(&final_path).unwrap();
+
+        let mut final_path: Option<PathBuf> = None;
+        if path.is_dir() {
+            let dir_files = fs::read_dir(&path).unwrap();
             for file in dir_files {
                 let file = file.unwrap();
                 let path = file.path();
@@ -72,33 +69,69 @@ impl CreeService {
                 if name == "index" {
                     if let Some(extension) = extension {
                         if let "html" | "htm" | "php" = &extension[..] {
-                            let (data, content_type) =
-                                self.handle_file(file.path(), &response.req).await?;
-                            response.set_header("Content-Type", &content_type);
-                            response.set_status(HTTPStatus::Ok);
-                            response.write(data);
-                            return Ok(response);
+                            final_path = Some(file.path());
+                            break;
                         }
                     }
                 }
             }
-        } else if final_path.is_file() {
-            let (data, content_type) = self.handle_file(final_path, &response.req).await?;
-            response.set_header("Content-Type", &content_type);
+        } else if path.is_file() {
+            final_path = Some(path);
+        }
+
+        if let Some(final_path) = final_path {
+            let (mut data, content_type) = self.handle_file(&final_path, &response.req).await?;
+            let FileMeta { extension, .. } = get_file_meta(&final_path)?;
+            response.set_header("Content-type", &content_type);
+
+            if extension == Some("php".to_owned()) {
+                let mut headers_end = 0;
+
+                let bytes: Vec<u8> = data
+                    .iter()
+                    .filter(|&byte| *byte != 0x0D as u8)
+                    .cloned()
+                    .collect();
+                for (idx, byte) in bytes.iter().enumerate() {
+                    if *byte == 0x0A as u8 {
+                        if let Some(next_byte) = bytes.get(idx + 1) {
+                            if *next_byte == 0x0A as u8 {
+                                headers_end = idx;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if headers_end > 0 {
+                    let headers = &bytes[..headers_end];
+
+                    let headers = String::from_utf8_lossy(headers);
+                    let headers: Vec<&str> = headers.lines().collect();
+                    for header in headers {
+                        let split: Vec<&str> = header.split(":").collect();
+                        if split.len() == 2 {
+                            response.set_header(split[0].trim(), split[1].trim())
+                        }
+                    }
+
+                    data = Vec::from(&bytes[headers_end + 2..]);
+                }
+            }
+
             response.set_status(HTTPStatus::Ok);
+
             response.write(data);
             return Ok(response);
         }
 
         response.set_status(HTTPStatus::NotFound);
         response.write(NOT_FOUND.as_bytes().to_vec());
-        Ok(response)
+        return Ok(response);
     }
 
     /// returns: (file_data: Vec<u8>, content_type: String)
-    async fn handle_file(&self, path: PathBuf, req: &Request) -> Result<(Vec<u8>, String), Error> {
-        let file_meta = get_file_meta(&path)?;
-        let FileMeta { extension, .. } = file_meta;
+    async fn handle_file(&self, path: &PathBuf, req: &Request) -> Result<(Vec<u8>, String), Error> {
+        let FileMeta { extension, .. } = get_file_meta(&path)?;
 
         if let Some(extension) = &extension {
             if extension == "php" {
@@ -141,50 +174,3 @@ impl CreeService {
         Err(Error::new("Something went wrong.", 1000))
     }
 }
-// impl Response {
-//    pub async fn write_response(
-//       &mut self,
-//       data: &[u8],
-//       mut status_code: HTTPStatus,
-//       insert_newline: bool,
-//    ) -> Result<(), Error> {
-//       if self.is_fulfilled() {
-//          return Err(Error::new(
-//             "Cannot write to a response that has already been sent.",
-//             2000,
-//          ));
-//       }
-
-//       if let Method::Unknown = self.req.method {
-//          self.set_header("Allow", "GET,HEAD,POST");
-//          status_code = HTTPStatus::MethodNotAllowed;
-//       }
-//       let code = get_phrase_from_code(&status_code).ok_or(Error::new(
-//          &format!("Invalid status code: {:?}.", &status_code),
-//          2003,
-//       ))?;
-//       let http_header = format!("HTTP/1.1 {} {}\n", code.0, code.1);
-
-//       let date = Utc::now().format("%a, %d %b %Y %T %Z");
-//       let date = format!("{}", date);
-//       self.set_header("Date", &date);
-
-//       let mut headers = [http_header.as_bytes(), self.get_headers().as_bytes()].concat();
-//       if insert_newline {
-//          headers.push(0x0A); // newline
-//       }
-
-//       let mut final_data: Vec<u8> = vec![];
-//       match self.req.method {
-//          Method::HEAD | Method::Unknown => {
-//             final_data = headers;
-//          }
-//          _ => {
-//             final_data = [&headers, data].concat();
-//          }
-//       };
-
-//       self.connection.write(&mut final_data).await?;
-//       Ok(())
-//    }
-// }

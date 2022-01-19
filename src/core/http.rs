@@ -52,7 +52,6 @@ impl Request {
     ) -> Result<Request, Error> {
         let req_data = String::from_utf8_lossy(&req_data);
 
-        println!("REQUEST: {}", req_data);
         let ParsedRequest {
             method,
             uri,

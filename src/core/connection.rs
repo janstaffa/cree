@@ -3,7 +3,9 @@ use crate::core::codes::get_phrase_from_code;
 use crate::core::http::Request;
 use crate::Response;
 use chrono::{DateTime, Utc};
+use cree::Encoding;
 use cree::Error;
+use libflate::deflate::EncodeOptions;
 use libflate::{deflate::Encoder as DfEncoder, gzip::Encoder as GzEncoder};
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -140,28 +142,48 @@ impl HTTPConnection {
         }
         res.set_header("Connection", connection_status);
 
-        let body = if use_compression {
-            let mut content_encoding;
-            let body = res.read_body();
-            let encoded_data = if body.len() > 1000 {
-                let mut encoder = GzEncoder::new(Vec::new()).unwrap();
-                std::io::copy(&mut &body[..], &mut encoder).unwrap();
+        let mut body = res.read_body().to_vec();
 
-                content_encoding = "gzip";
-                encoder.finish().into_result().unwrap()
-            } else {
-                let mut encoder = DfEncoder::new(Vec::new());
-                std::io::copy(&mut &body[..], &mut encoder).unwrap();
+        if use_compression {
+            let accept_encoding = res.req.headers.get("accept-encoding");
+            if let Some(accept_encoding) = accept_encoding {
+                let accept_encoding: Vec<&str> = accept_encoding.split(",").collect();
+                let accept_encoding: Vec<String> = accept_encoding
+                    .iter()
+                    .map(|&i| i.trim().to_lowercase())
+                    .collect();
+                let has_gzip = accept_encoding.contains(&String::from("gzip"));
+                let has_deflate = accept_encoding.contains(&String::from("deflate"));
 
-                content_encoding = "deflate";
-                encoder.finish().into_result().unwrap()
-            };
+                let content = res.read_body();
+                let mut content_encoding: Option<Encoding> = None;
 
-            res.set_header("Content-Encoding", content_encoding);
-            encoded_data
-        } else {
-            res.read_body().to_vec()
-        };
+                // Gzip usually increases file size in files with less than 1000 bytes
+                if content.len() > 1000 && has_gzip {
+                    content_encoding = Some(Encoding::Gzip);
+                } else if has_deflate {
+                    content_encoding = Some(Encoding::Deflate);
+                };
+
+                if let Some(content_encoding) = content_encoding {
+                    let (encoded_data, encoding_name) = match content_encoding {
+                        Encoding::Gzip => {
+                            let mut encoder = GzEncoder::new(Vec::new()).unwrap();
+                            std::io::copy(&mut &content[..], &mut encoder).unwrap();
+                            (encoder.finish().into_result().unwrap(), "gzip")
+                        }
+                        Encoding::Deflate => {
+                            let mut encoder = DfEncoder::new(Vec::new());
+                            std::io::copy(&mut &content[..], &mut encoder).unwrap();
+                            (encoder.finish().into_result().unwrap(), "deflate")
+                        }
+                    };
+
+                    res.set_header("Content-Encoding", encoding_name);
+                    body = encoded_data;
+                }
+            }
+        }
 
         res.set_header("Content-Length", &body.len().to_string());
 

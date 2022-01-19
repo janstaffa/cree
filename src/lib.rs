@@ -14,6 +14,7 @@ pub struct CreeOptions {
     pub enable_php: Option<bool>,
     pub root_directory: Option<PathBuf>,
     pub php_path: Option<PathBuf>,
+    pub use_compression: Option<bool>,
     pub headers: Option<Headers>,
 }
 impl CreeOptions {
@@ -22,6 +23,7 @@ impl CreeOptions {
             enable_php: Some(false),
             root_directory: None,
             php_path: None,
+            use_compression: Some(true),
             headers: None,
         }
     }
@@ -68,4 +70,9 @@ pub async fn close_socket(mut socket: TcpStream) -> Result<(), Error> {
         return Err(Error::new("Failed to close the connection.", 1004));
     }
     Ok(())
+}
+
+pub enum Encoding {
+    Gzip,
+    Deflate,
 }

@@ -5,5 +5,9 @@ enable_php = true
 php_path = "C:\\php\\php-cgi.exe"
 
 
+use_compression = true
+
+
 [headers]
 content_security_policy = "default-src 'self'"
+
