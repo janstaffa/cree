@@ -6,7 +6,9 @@
 2. connection
 3. methods
 4. request
+   - headers
 5. response
+   - headers
 
 ### 1. general information:
 
@@ -38,13 +40,33 @@
 
 **Example POST request:**
 
-```
+```http
 POST /index.php?name=john&age=21 HTTP/1.1
 Content-Type: application/x-www-form-urlencoded
 Accept-Encoding: gzip, deflate
 
 username=john+doe
 password=123456
+```
+
+#### Request Headers:
+
+###### Range
+
+- The Range header can be used to specify that partial content is being requested (usually to stream video). Only one range is accepted.
+- format: `<unit>=<range-start>-<range-end>`
+  - unit: the unit of meassure - **byte** only accepted
+  - range-start: number of units from start
+  - range-end: range-start + requested length, optional - if none specified, one **chunk** is send (default is 1MB but it can be changed inside the cree config file using the `pc_chunk_size` field)
+
+**Example Range header usage:**
+
+```http
+# get first 512 bytes
+Range: bytes=0-512
+
+# get entire file
+Range: bytes=0-
 ```
 
 ### 5. response:
@@ -72,7 +94,7 @@ for more details visit <a href="https://www.w3.org/Protocols/rfc2616/rfc2616-sec
 
 **Example response message:**
 
-```
+```http
 HTTP/1.1 200 OK
 
 Date: Tue, 18 Jan 2022 22:00:0 GMT
@@ -80,4 +102,21 @@ Content-type: text/html
 Content-Length: 13
 
 Hello, world!
+```
+
+#### Response Headers:
+
+###### Content-Range:
+
+- The Content-Range header specifies what part of the requested file was sent alongside the full uncompressed file byte length.
+- format: `<range-start>-<range-end>/<full-file-length>`
+  - range-start: number of bytes from start
+  - range-end: range-start + requested length
+  - full-file-length: the entire uncompressed file length in bytes
+
+**Example Content-Range header:**
+
+```http
+# response contains bytes 0 to 1024, the whole file is 2048 bytes long
+Content-Range: 0-1024/2048
 ```

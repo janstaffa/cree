@@ -28,6 +28,7 @@ use libflate::{deflate::Encoder as DfEncoder, gzip::Encoder as GzEncoder};
 
 #[tokio::main]
 async fn main() {
+    // read cli arguments
     let matches = App::new("Cree")
         .version("0.1.0")
         .subcommand(
@@ -49,10 +50,8 @@ async fn main() {
         .get_matches();
 
     if let Some(matches) = matches.subcommand_matches("start") {
-        let port: u16 = matches.value_of("port").unwrap_or("80").parse().unwrap();
+        let port = matches.value_of("port");
         let path = matches.value_of("path");
-
-        let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
         let mut options = CreeOptions::get_default();
         let conf_file = fs::read(PathBuf::from("cree.toml"));
@@ -70,6 +69,17 @@ async fn main() {
             eprintln!("No cree conf file found.");
         }
 
+        // check if port was passed in cli, if not check the config file or use a default(80)
+        let port = if let Some(p) = port {
+            p.parse().unwrap_or(80)
+        } else {
+            if let Some(p) = options.port {
+                p
+            } else {
+                80
+            }
+        };
+
         if let Some(path) = path {
             options.root_directory = Some(PathBuf::from(&path));
         }
@@ -81,7 +91,14 @@ async fn main() {
                     &path.to_str().unwrap()
                 );
             }
+
+            // socket address to listen on
+            let addr = SocketAddr::from(([0, 0, 0, 0], port));
+
             let listener = TcpListener::bind(addr).await.unwrap();
+
+            // the service holds information about the server configuration and is cloned into every connections thread
+
             let service = match CreeService::new(path, &options) {
                 Ok(s) => s,
                 Err(e) => {
@@ -93,13 +110,18 @@ async fn main() {
             // let mut threads = vec![];
 
             println!("Listening on {}", addr);
+
+            // listen for new connections
             while let Ok((socket, _)) = listener.accept().await {
                 let service = service.clone();
-                //  println!("new connection");
 
+                // spawn a new thread and move in the service
                 tokio::spawn(async move {
+                    // construct an HTTPConnection which wraps the connection streams and reveals higher level API
                     let mut tcp_connection = HTTPConnection::new(socket).unwrap();
 
+                    // listen for individual requests on the connection (this makes persistent connections work)
+                    // the listen_for_requests() method will halt until a request is receieved
                     while let Ok(req) = tcp_connection.listen_for_requests().await {
                         if let Method::Unknown = &req.method {
                             let mut res = Response::new(req);
@@ -109,6 +131,9 @@ async fn main() {
                             continue;
                         }
 
+                        // println!("request: {}", req.uri);
+
+                        // construct a response according to the request
                         let res = service.create_response(req).await.unwrap();
 
                         let use_compression = if let Some(uc) = options.use_compression {
@@ -116,13 +141,17 @@ async fn main() {
                         } else {
                             false
                         };
+
+                        // send the response to the client
                         tcp_connection
                             .write_response(res, use_compression)
                             .await
                             .unwrap();
                     }
+
+                    // the above loop will exit if an error is returned from listen_for_requests(), which means the connection has to be closed
                     tcp_connection.close().await.unwrap();
-                    //   println!("connection closed");
+                    //   println!("connection closed: {:?}", remote_addr);
                 });
             }
             // futures::future::join_all(threads).await;
@@ -133,7 +162,6 @@ async fn main() {
     }
 }
 
-// TODO: write headers separetly, then write content
 // TODO: Add custom error page option to cree.toml.
 // TODO: REDIRECT_STATUS in php should be dynamic (200, 400, 500,...)
 // TODO: add logging option to CreeServer

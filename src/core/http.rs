@@ -14,7 +14,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Method {
     GET,
     HEAD,
@@ -30,7 +30,7 @@ impl Method {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Request {
     // pub connection: ReadHalf<TcpStream>,
     pub remote_address: SocketAddr,
@@ -159,10 +159,14 @@ struct ParsedRequest {
     body: String,
     headers: Headers,
 }
+
+// takes the raw UTF-8 request and extracts message data from it
 fn parse_request(req: &str) -> Result<ParsedRequest, Error> {
     let req = req.trim();
+
     let req = req.replace("\r", "");
 
+    // split body and header section
     let parts: Vec<&str> = req.split("\n\n").collect();
     if parts.len() == 0 {
         return Err(Error::new("Invalid request", 2001));
@@ -173,6 +177,7 @@ fn parse_request(req: &str) -> Result<ParsedRequest, Error> {
     }
     let request_line: Vec<&str> = head[0].split_whitespace().collect();
 
+    // extract headers
     let raw_headers = &head[1..];
     let mut headers: Headers = HashMap::new();
     if raw_headers.len() > 0 {
@@ -199,6 +204,7 @@ fn parse_request(req: &str) -> Result<ParsedRequest, Error> {
         }
     };
 
+    // separate uri and path
     let uri = request_line[1];
     let query: &str = if uri.contains("?") {
         let split: Vec<&str> = uri.split("?").collect();

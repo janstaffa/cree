@@ -1,4 +1,4 @@
-# RUSTFLAGS=-Awarnings cargo run start --path "www" 
+# RUSTFLAGS=-Awarnings cargo run start 
 
 [package]
 name = "cree"
