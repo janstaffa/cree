@@ -1,5 +1,3 @@
-use crate::core::codes::get_phrase_from_code;
-use crate::core::codes::HTTPStatus;
 use crate::HTTPConnection;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use chrono::DateTime;
@@ -13,6 +11,8 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
+
+use super::codes::HTTPStatus;
 
 #[derive(Debug, Clone)]
 pub enum Method {

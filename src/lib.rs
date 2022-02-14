@@ -1,7 +1,9 @@
+use bytes::Buf;
 use libflate::{deflate::Encoder as DfEncoder, gzip::Encoder as GzEncoder};
 use serde_derive::Deserialize;
 use std::ffi::OsStr;
 use std::fmt::Debug;
+use std::io::Read;
 use std::path::PathBuf;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -94,3 +96,19 @@ impl Range {
 }
 
 pub const M_BYTE: usize = 1048576;
+
+pub fn join_bytes(bytes: &[u8]) -> Result<u64, Error> {
+    if bytes.len() > 8 {
+        return Err(Error::new("Invalid input. (max length is 8)", 1007));
+    }
+    let mut full_bytes = vec![0u8; 8 - bytes.len()];
+    full_bytes.extend(bytes);
+
+    let mut bytes = [0u8; 8];
+    full_bytes
+        .reader()
+        .read(&mut bytes)
+        .or(Err(Error::new("Failed to read the bytes.", 1002)))?;
+
+    Ok(u64::from_be_bytes(bytes))
+}

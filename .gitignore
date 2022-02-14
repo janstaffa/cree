@@ -1,2 +1,5 @@
 /target
 /www
+bak
+certs/*
+include/*

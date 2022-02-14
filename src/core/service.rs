@@ -1,7 +1,3 @@
-use super::codes::NOT_FOUND;
-use crate::core::codes::HTTPStatus;
-use crate::core::http::{Request, Response};
-use crate::core::mime::get_mime_type;
 use crate::extensions::php::PHPVariables;
 use crate::extensions::php::{PHPOptions, PHP};
 use cree::{get_file_meta, FileMeta};
@@ -12,6 +8,10 @@ use std::io::SeekFrom;
 use std::path::PathBuf;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+use super::http::codes::{HTTPStatus, NOT_FOUND};
+use super::http::mime::get_mime_type;
+use super::http::protocol::{Request, Response};
 
 #[derive(Clone)]
 pub struct CreeService {

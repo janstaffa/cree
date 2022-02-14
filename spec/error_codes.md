@@ -8,6 +8,7 @@
 - 1004 - Stream shutdown failed.
 - 1005 - File read failed.
 - 1006 - Stream flush failed.
+- 1007 - Invalid input.
 
 ### HTTP errors(2000):
 
@@ -19,6 +20,17 @@
 
 ### PHP errors(3000):
 
-### TCP errors(4000)
+### TCP errors(4000):
 
 - 4001 - Failed to obtain remote address.
+- 4002 - Maximum number of messages per connection reached.
+- 4003 - Connection stalling limit reached.
+
+### TLS errors(5000):
+
+- 5001 - Invalid message.
+- 5002 - Unknown message type.
+- 5003 - Failed to calculate encryption keys.
+- 5004 - Invalid field.
+- 5005 - Unsupported version.
+- 5006 - Crypto failure.

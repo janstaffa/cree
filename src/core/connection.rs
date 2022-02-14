@@ -1,6 +1,3 @@
-use super::http::Method;
-use crate::core::codes::get_phrase_from_code;
-use crate::core::http::Request;
 use crate::Response;
 use chrono::{DateTime, Utc};
 use cree::Encoding;
@@ -16,6 +13,10 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, Receiver};
 use tokio::task::JoinHandle;
 use tokio::time;
+
+use super::http::codes::get_phrase_from_code;
+use super::http::protocol::Method;
+use super::http::protocol::Request;
 
 const MAX_REQUESTS: usize = 1024;
 const CONNECTION_STALLING_LIMIT: Duration = Duration::from_secs(60);
@@ -43,7 +44,7 @@ impl HTTPConnection {
 
         // create a separate thread to listen for request so the connection thread is not blocked
         let listener_thread = tokio::spawn(async move {
-            // this loop keep the connection running after a request is receieved
+            // this loop keep the connection running after a request is received
             loop {
                 // beaucause a tcp stream doesnt include an end character(like EOF), we try to read a buffer of 128 in a loop, until there is no data left
                 const BUFFER_SIZE: usize = 128;
@@ -78,7 +79,7 @@ impl HTTPConnection {
         Ok(connection)
     }
     pub async fn listen_for_requests(&mut self) -> Result<Request, Error> {
-        // if a request isnt receieved within n seconds the connection will be closed
+        // if a request isnt received within n seconds the connection will be closed
         if let Ok(raw_request) =
             time::timeout(CONNECTION_STALLING_LIMIT, self.listener_receiver.recv()).await
         {

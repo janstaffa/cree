@@ -18,7 +18,7 @@
 
 - [x] The server accepts **persistent connections** - each connection is not closed after the first request is handled and will remain open until either the client sends a `Connection: close` header (or closes the connection otherwise), the message stalling limit is reached (time between individual requests) or the maximum number of requests sent through one connection is reached.
 
-- [ ] The server can handle **pipelined requests** - when multiple requests are receieved from the client it handles them one by one and responds in the same order once finished.
+- [ ] The server can handle **pipelined requests** - when multiple requests are received from the client it handles them one by one and responds in the same order once finished.
 
 ### 3. methods:
 
