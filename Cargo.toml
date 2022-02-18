@@ -1,13 +1,17 @@
+# RUSTFLAGS=-Awarnings cargo run start 
+
 [package]
 name = "cree"
 version = "0.1.0"
 edition = "2021"
+authors = ["janstaffa"]
+
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = "3.0.0-beta.5"
-tokio = { version = "1.14.0", features = ["full"] }
+clap = "3.0.0"
+tokio = { version = "1.15.0", features = ["full"] }
 tokio-util = "0.6.9"
 futures = "0.3"
 toml = "0.5.8"
@@ -15,3 +19,16 @@ serde_derive = "1.0"
 serde = "1.0"
 uuid = { version = "0.8", features = ["v4"] }
 bytes = "1.1.0"
+chrono = "0.4.19"
+libflate = "1.1.1"
+# x25519-dalek = "1.2.0"
+rand = "0.8.4"
+rand_core = "0.5.1"
+sha2 = "0.10.1"
+ring = "0.16.20"
+base64 = "0.13.0"
+sha1 = "0.10.0"
+rust-crypto = "0.2.36"
+aes-gcm = "0.9.4"
+curve25519-dalek = "3.2.0"
+async-trait = "0.1.52"

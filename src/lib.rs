@@ -1,59 +1,73 @@
+use bytes::Buf;
+use libflate::{deflate::Encoder as DfEncoder, gzip::Encoder as GzEncoder};
 use serde_derive::Deserialize;
 use std::ffi::OsStr;
+use std::fmt::Debug;
+use std::io::Read;
 use std::path::PathBuf;
 use tokio::io::AsyncWriteExt;
-use tokio::io::BufReader;
 use tokio::net::TcpStream;
 
+pub mod api;
+mod core;
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Headers {
+    pub content_security_policy: Option<String>,
+}
 #[derive(Debug, Deserialize, Clone)]
 pub struct CreeOptions {
-   pub enable_php: Option<bool>,
-   pub php_path: Option<PathBuf>,
+    pub port: Option<u16>,
+    pub enable_php: Option<bool>,
+    pub root_directory: Option<PathBuf>,
+    pub php_path: Option<PathBuf>,
+    pub use_compression: Option<bool>,
+    pub pc_chunk_size: Option<usize>,
+    pub headers: Option<Headers>,
 }
 impl CreeOptions {
-   pub fn get_default() -> CreeOptions {
-      CreeOptions {
-         enable_php: Some(false),
-         php_path: None,
-      }
-   }
+    pub fn get_default() -> CreeOptions {
+        CreeOptions {
+            port: Some(80),
+            enable_php: Some(false),
+            root_directory: None,
+            php_path: None,
+            use_compression: Some(true),
+            pc_chunk_size: Some(M_BYTE),
+            headers: None,
+        }
+    }
 }
 
-pub struct FileMeta {
-   pub name: String,
-   pub extension: String,
-}
-pub fn get_file_meta(path: &PathBuf) -> Result<FileMeta, String> {
-   let name = path
-      .file_stem()
-      .and_then(OsStr::to_str)
-      .ok_or("Invalid file name")?
-      .to_owned();
-   let extension = path
-      .extension()
-      .and_then(OsStr::to_str)
-      .unwrap_or("")
-      .to_owned();
-
-   // let file_name = path
-   //    .file_name()
-   //    .ok_or("Invalid file name.")?
-   //    .to_str()
-   //    .ok_or("Invalid file name.")?;
-   // let split: Vec<&str> = file_name.split('.').collect();
-   // let len = split.len();
-   // if len < 2 {
-   //    return Err(String::from("Invalid file name."));
-   // }
-   // let name = split[..len - 1].join("");
-   // let extension = split[len - 1].to_owned();
-   let meta = FileMeta { name, extension };
-   Ok(meta)
+#[derive(Debug)]
+pub struct Error {
+    pub msg: String,
+    pub code: u32,
 }
 
-pub async fn write_to_stream(stream: &mut BufReader<TcpStream>, data: &[u8]) -> Result<(), String> {
-   if let Err(_) = stream.write_all(data).await {
-      return Err(String::from("Failed to write data to the stream."));
-   }
-   Ok(())
+impl Error {
+    pub fn new(msg: &str, code: u32) -> Error {
+        Error {
+            msg: msg.to_owned(),
+            code,
+        }
+    }
+}
+
+pub const M_BYTE: usize = 1048576;
+
+pub fn join_bytes(bytes: &[u8]) -> Result<u64, Error> {
+    if bytes.len() > 8 {
+        return Err(Error::new("Invalid input. (max length is 8)", 1007));
+    }
+    let mut full_bytes = vec![0u8; 8 - bytes.len()];
+    full_bytes.extend(bytes);
+
+    let mut bytes = [0u8; 8];
+    full_bytes
+        .reader()
+        .read(&mut bytes)
+        .or(Err(Error::new("Failed to read the bytes.", 1002)))?;
+
+    Ok(u64::from_be_bytes(bytes))
 }
