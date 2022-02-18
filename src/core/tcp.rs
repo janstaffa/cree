@@ -1,6 +1,9 @@
+use crate::Error;
 use chrono::{DateTime, Utc};
-use cree::Error;
+use tokio::sync::Mutex;
+
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -10,25 +13,25 @@ use tokio::sync::mpsc::{self, Receiver};
 use tokio::task::JoinHandle;
 use tokio::time;
 
-const MAX_MESSAGES: usize = 1024;
+pub const TCP_MAX_MESSAGES: u32 = 1024;
 const CONNECTION_STALLING_LIMIT: Duration = Duration::from_secs(60);
 const BUFFER_SIZE: usize = 128;
 
-pub struct TCPMessage {
+pub struct TcpMessage {
     pub time_received: DateTime<Utc>,
     pub content: Vec<u8>,
 }
-pub struct TCPConnection {
+pub struct PersistentTcpConnection {
     remote_address: SocketAddr,
-    write_handle: WriteHalf<TcpStream>,
+    write_handle: Arc<Mutex<WriteHalf<TcpStream>>>,
     time_established: DateTime<Utc>,
-    messages_count: usize,
+    messages_count: u32,
     listener_thread: JoinHandle<()>,
     listener_receiver: Receiver<Vec<u8>>,
 }
 
-impl TCPConnection {
-    pub fn new(tcp_socket: TcpStream) -> Result<TCPConnection, Error> {
+impl PersistentTcpConnection {
+    pub fn new(tcp_socket: TcpStream) -> Result<PersistentTcpConnection, Error> {
         let socket_address = tcp_socket
             .peer_addr()
             .or(Err(Error::new("Failed to obtain remote address.", 4001)))?;
@@ -37,7 +40,7 @@ impl TCPConnection {
         let (mut read_handle, write_handle) = tokio::io::split(tcp_socket);
 
         // create a channel to receieve data from a thread
-        let (tx, rx) = mpsc::channel(MAX_MESSAGES);
+        let (tx, rx) = mpsc::channel(TCP_MAX_MESSAGES as usize);
 
         // create a separate thread to listen for request so the connection thread is not blocked
         let listener_thread = tokio::spawn(async move {
@@ -64,9 +67,9 @@ impl TCPConnection {
                 }
             }
         });
-        let connection = TCPConnection {
+        let connection = PersistentTcpConnection {
             remote_address: socket_address,
-            write_handle,
+            write_handle: Arc::new(Mutex::new(write_handle)),
             time_established: Utc::now(),
             messages_count: 0,
             listener_thread,
@@ -74,23 +77,24 @@ impl TCPConnection {
         };
         Ok(connection)
     }
-    pub async fn read_message(&mut self) -> Result<TCPMessage, Error> {
+    pub async fn messages(&mut self) -> Result<TcpMessage, Error> {
         // if a message isnt received within n seconds the connection will be closed
         if let Ok(raw_message) =
             time::timeout(CONNECTION_STALLING_LIMIT, self.listener_receiver.recv()).await
         {
             if let Some(raw_message) = raw_message {
-                if self.messages_count + 1 == MAX_MESSAGES {
+                // keep track of the number of messages send on each connection
+                self.messages_count += 1;
+
+                if self.messages_count > TCP_MAX_MESSAGES {
+                    self.close().await?;
                     return Err(Error::new(
                         "Maximum number of messages per TCP connection was reached.",
                         4002,
                     ));
                 }
 
-                // keep track of the number of messages send on each connection
-                self.messages_count += 1;
-
-                let message = TCPMessage {
+                let message = TcpMessage {
                     time_received: Utc::now(),
                     content: raw_message,
                 };
@@ -104,22 +108,43 @@ impl TCPConnection {
     }
 
     pub async fn write(&mut self, data: &[u8]) -> Result<(), Error> {
-        self.write_handle
+        let mut handle = self
+            .write_handle
+            .try_lock()
+            .or(Err(Error::new("Failed to obtain write lock.", 1000)))?;
+
+        handle
             .write_all(data)
             .await
             .or(Err(Error::new("Failed to write to the stream.", 1003)))?;
 
-        if let Err(_) = self.write_handle.flush().await {
+        if let Err(_) = handle.flush().await {
             return Err(Error::new("Failed to flush the stream.", 1006));
         };
         Ok(())
     }
 
     pub async fn close(&mut self) -> Result<(), Error> {
+        let mut handle = self
+            .write_handle
+            .try_lock()
+            .or(Err(Error::new("Failed to obtain write lock.", 1000)))?;
+
         self.listener_thread.abort();
-        if let Err(_) = self.write_handle.shutdown().await {
+        if let Err(_) = handle.shutdown().await {
             return Err(Error::new("Failed to close the connection.", 1004));
         }
         Ok(())
+    }
+
+    pub fn remote_addr(&self) -> SocketAddr {
+        self.remote_address
+    }
+
+    pub fn get_write_handle(&self) -> &Arc<Mutex<WriteHalf<TcpStream>>> {
+        &self.write_handle
+    }
+    pub fn get_message_count(&self) -> u32 {
+        self.messages_count
     }
 }

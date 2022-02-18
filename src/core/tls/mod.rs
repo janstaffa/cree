@@ -1,5 +1,5 @@
 use self::crypto::ECCurve;
-use cree::Error;
+use crate::Error;
 
 pub mod crypto;
 pub mod digest;
