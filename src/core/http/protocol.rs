@@ -1,8 +1,6 @@
 use crate::core::http::codes::get_phrase_from_code;
 use crate::core::http::Encoding;
-use crate::Error;
-use async_trait::async_trait;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use crate::utils::Error;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
@@ -10,8 +8,8 @@ use libflate::{deflate::Encoder as DfEncoder, gzip::Encoder as GzEncoder};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::io::{ReadHalf, WriteHalf};
+use tokio::io::AsyncWriteExt;
+use tokio::io::WriteHalf;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
@@ -42,15 +40,16 @@ impl PartialEq for Method {
 #[derive(Debug, Clone)]
 pub struct Request {
     // pub connection: ReadHalf<TcpStream>,
-    pub remote_address: SocketAddr,
+    remote_address: SocketAddr,
     time_received: DateTime<Utc>,
     pub method: Method,
     pub path: String,
     pub uri: String,
-    pub body: String,
+    body: String,
     pub query: String,
-    pub http_info: String,
+    http_info: String,
     pub headers: Headers,
+    pub params: HashMap<String, String>,
 }
 
 impl Request {
@@ -71,7 +70,6 @@ impl Request {
             headers,
         } = parse_request(&req_data)?;
         let req = Request {
-            // connection,
             remote_address,
             time_received: Utc::now(),
             method,
@@ -81,8 +79,14 @@ impl Request {
             query: query,
             http_info,
             headers,
+            params: HashMap::new(),
         };
         Ok(req)
+    }
+
+    /// The address of the connected peer.
+    pub fn remote_addr(&self) -> SocketAddr {
+        self.remote_address
     }
 
     /// DateTime of when the connection was established

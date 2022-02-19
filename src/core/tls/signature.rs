@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::utils::Error;
 use ring::{rand, signature};
 
 use super::digest::DigestAlgorithm;

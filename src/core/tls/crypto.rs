@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::utils::Error;
 use crypto::aead::{AeadDecryptor, AeadEncryptor};
 use crypto::aes_gcm::AesGcm;
 use crypto::{aes::KeySize, hmac, sha2};

@@ -1,4 +1,4 @@
-use crate::{join_bytes, Error};
+use crate::utils::{join_bytes, Error};
 use crypto::mac::Mac;
 use rand_core::{OsRng, RngCore};
 

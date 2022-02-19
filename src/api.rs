@@ -1,8 +1,9 @@
-use std::{collections::HashMap, io, net::SocketAddr, path::PathBuf, pin::Pin, sync::Arc};
-
 use crate::core::http::Encoding;
 use chrono::Utc;
 use futures::{future::join_all, Future};
+use std::hash::Hash;
+use std::io::{Error, ErrorKind};
+use std::{collections::HashMap, io, net::SocketAddr, path::PathBuf, pin::Pin, sync::Arc};
 use tokio::{
     io::{AsyncWriteExt, WriteHalf},
     net::{TcpListener, TcpSocket, TcpStream},
@@ -29,11 +30,13 @@ pub enum CreeOptions {
         private_key: PathBuf,
     },
 }
+
+type EndpointFuntion = fn(Request, Response) -> Pin<Box<dyn Future<Output = ()> + Send>>;
 pub struct CreeServer {
     options: CreeOptions,
     address: SocketAddr,
-    http_listener_thread: Option<JoinHandle<()>>,
-    http_listener_receiver: Option<Receiver<(Request, Response)>>,
+    endpoints: HashMap<RoutePattern, (Method, EndpointFuntion)>,
+    service: Option<EndpointFuntion>,
 }
 
 impl CreeServer {
@@ -45,57 +48,149 @@ impl CreeServer {
         CreeServer {
             options,
             address: SocketAddr::from(([0, 0, 0, 0], port)),
-            http_listener_thread: None,
-            http_listener_receiver: None,
+            endpoints: HashMap::new(),
+            service: None,
         }
     }
-    pub fn listen(&mut self, port: u16) {
+    pub async fn listen(&mut self, port: u16) {
         self.address.set_port(port);
 
-        let (tx, rx) = mpsc::channel(TCP_MAX_MESSAGES as usize);
-        let address = (self.address).clone();
-        let options = self.options.clone();
-        let listener_thread = tokio::spawn(async move {
-            match options {
-                CreeOptions::HttpServer => {
-                    let listener = TcpListener::bind(address).await.unwrap();
-                    println!("Listening on {}", address);
+        match self.options {
+            CreeOptions::HttpServer => {
+                let address = self.address;
+                let listener = TcpListener::bind(address).await.unwrap();
+                println!("Listening on {}", address);
 
-                    let mut threads = vec![];
-                    // listen for new connections
-                    while let Ok((socket, _)) = listener.accept().await {
-                        let tx = tx.clone();
-                        threads.push(tokio::spawn(async move {
-                            let mut tcp_connection = PersistentTcpConnection::new(socket).unwrap();
-                            while let Ok(message) = tcp_connection.messages().await {
-                                let req =
-                                    Request::new(message.content, tcp_connection.remote_addr())
-                                        .unwrap();
+                let mut threads = vec![];
+                // listen for new connections
+                while let Ok((socket, _)) = listener.accept().await {
+                    let endpoints = self.endpoints.clone();
+                    let service = self.service.clone();
+                    threads.push(tokio::spawn(async move {
+                        let mut tcp_connection = PersistentTcpConnection::new(socket).unwrap();
+                        'message_loop: while let Ok(message) = tcp_connection.messages().await {
+                            let mut req =
+                                Request::new(message.content, tcp_connection.remote_addr())
+                                    .unwrap();
 
-                                let write_handle = tcp_connection.get_write_handle().clone();
-                                let res = Response::__new(
-                                    write_handle,
-                                    req.clone(),
-                                    true,
-                                    tcp_connection.get_message_count() == TCP_MAX_MESSAGES,
-                                );
-                                tx.send((req, res)).await;
+                            let write_handle = tcp_connection.get_write_handle().clone();
+                            let res = Response::__new(
+                                write_handle,
+                                req.clone(),
+                                true,
+                                tcp_connection.get_message_count() == TCP_MAX_MESSAGES,
+                            );
+
+                            for (pattern, (method, function)) in &endpoints {
+                                if &req.method == method {
+                                    let matched = pattern.match_str(&req.path);
+                                    if let Some(matched) = matched {
+                                        req.params = matched;
+                                        function(req, res).await;
+                                    }
+                                    continue 'message_loop;
+                                }
                             }
-                        }));
-                    }
-                    futures::future::join_all(threads).await;
+                            if let Some(service) = service {
+                                service(req, res).await;
+                            }
+                        }
+                    }));
                 }
-                CreeOptions::HttpsServer { .. } => {}
+                futures::future::join_all(threads).await;
             }
-        });
-        self.http_listener_thread = Some(listener_thread);
-        self.http_listener_receiver = Some(rx);
+            CreeOptions::HttpsServer { .. } => {}
+        }
     }
 
-    pub async fn accept(&mut self) -> Result<(Request, Response), ()> {
-        if let Some(http_listener_receiver) = &mut self.http_listener_receiver {
-            return Ok(http_listener_receiver.recv().await.ok_or(())?);
+    pub fn get(&mut self, mut route: &str, function: EndpointFuntion) -> std::io::Result<()> {
+        let pattern = RoutePattern::from(route)?;
+        // /images/13541654/owner/5653541
+        // /images/{image_id}/owner/{user_id}
+
+        self.endpoints.insert(pattern, (Method::GET, function));
+        Ok(())
+    }
+    pub fn post(&mut self, route: &str, function: EndpointFuntion) {
+        //   self.endpoints
+        //       .insert(route.into(), (Method::POST, function));
+    }
+    pub fn serve(&mut self, function: EndpointFuntion) {
+        self.service = Some(function);
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash)]
+struct RoutePattern {
+    pub full_route: String,
+    //                    (index, key_name)
+    pub replacements: Vec<(usize, String)>,
+}
+
+impl RoutePattern {
+    pub fn from(original_route: &str) -> std::io::Result<RoutePattern> {
+        let mut route = String::from(original_route);
+        let chars: Vec<char> = route.chars().collect();
+        if chars.len() == 0 {
+            return Err(Error::new(ErrorKind::InvalidInput, "No route specified."));
         }
-        Err(())
+        if chars[0] != '/' {
+            route.insert(0, '/');
+        }
+
+        if let Some('/') = chars.last() {
+            route.pop();
+        }
+        let parts: Vec<&str> = route.split("/").collect();
+
+        let mut replacements = vec![];
+
+        for (idx, part) in parts.iter().enumerate() {
+            let chars: Vec<char> = part.chars().collect();
+            if chars.len() > 0 {
+                if chars[0] == '{' && chars[chars.len() - 1] == '}' {
+                    let key_name = String::from_iter(&chars[1..chars.len() - 1]);
+                    replacements.push((idx, key_name));
+                }
+            }
+        }
+
+        //   let common_part = if replacements.len() > 0 {
+        //       let first_replacement_idx = replacements[0].0;
+        //       parts[..first_replacement_idx].join("/")
+        //   } else {
+        //       route.clone()
+        //   };
+
+        Ok(RoutePattern {
+            full_route: route,
+            replacements,
+        })
+    }
+
+    pub fn match_str(&self, match_str: &str) -> Option<HashMap<String, String>> {
+        if match_str.len() == 0 {
+            return None;
+        }
+        let original_parts: Vec<&str> = self.full_route.split("/").collect();
+        let parts: Vec<&str> = match_str.split("/").collect();
+        if original_parts.len() != parts.len() {
+            return None;
+        }
+
+        let mut params: HashMap<String, String> = HashMap::new();
+        for (idx, part) in parts.iter().enumerate() {
+            let replacement = self.replacements.iter().find(|(i, _)| *i == idx);
+            if let Some((_, key)) = replacement {
+                params.insert(key.to_string(), part.to_string());
+            }
+        }
+        Some(params)
+    }
+}
+
+impl PartialEq for RoutePattern {
+    fn eq(&self, other: &Self) -> bool {
+        self.full_route == other.full_route
     }
 }

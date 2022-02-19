@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::utils::Error;
 use chrono::{DateTime, Utc};
 use tokio::sync::Mutex;
 
