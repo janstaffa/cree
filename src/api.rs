@@ -52,7 +52,7 @@ impl CreeServer {
             service: None,
         }
     }
-    pub async fn listen(&mut self, port: u16) {
+    pub async fn listen(&mut self, port: u16) -> std::io::Result<()> {
         self.address.set_port(port);
 
         match self.options {
@@ -74,7 +74,7 @@ impl CreeServer {
                                     .unwrap();
 
                             let write_handle = tcp_connection.get_write_handle().clone();
-                            let res = Response::__new(
+                            let mut res = Response::__new(
                                 write_handle,
                                 req.clone(),
                                 true,
@@ -87,13 +87,16 @@ impl CreeServer {
                                     if let Some(matched) = matched {
                                         req.params = matched;
                                         function(req, res).await;
+                                        continue 'message_loop;
                                     }
-                                    continue 'message_loop;
                                 }
                             }
-                            if let Some(service) = service {
+                            if let Some(service) = &service {
                                 service(req, res).await;
+                                continue;
                             }
+
+                            res.send(b"Not found").await.unwrap();
                         }
                     }));
                 }
@@ -101,19 +104,18 @@ impl CreeServer {
             }
             CreeOptions::HttpsServer { .. } => {}
         }
+        Ok(())
     }
 
-    pub fn get(&mut self, mut route: &str, function: EndpointFuntion) -> std::io::Result<()> {
+    pub fn get(&mut self, route: &str, function: EndpointFuntion) -> std::io::Result<()> {
         let pattern = RoutePattern::from(route)?;
-        // /images/13541654/owner/5653541
-        // /images/{image_id}/owner/{user_id}
-
         self.endpoints.insert(pattern, (Method::GET, function));
         Ok(())
     }
-    pub fn post(&mut self, route: &str, function: EndpointFuntion) {
-        //   self.endpoints
-        //       .insert(route.into(), (Method::POST, function));
+    pub fn post(&mut self, route: &str, function: EndpointFuntion) -> std::io::Result<()> {
+        let pattern = RoutePattern::from(route)?;
+        self.endpoints.insert(pattern, (Method::POST, function));
+        Ok(())
     }
     pub fn serve(&mut self, function: EndpointFuntion) {
         self.service = Some(function);
@@ -139,7 +141,9 @@ impl RoutePattern {
         }
 
         if let Some('/') = chars.last() {
-            route.pop();
+            if chars.len() > 1 {
+                route.pop();
+            }
         }
         let parts: Vec<&str> = route.split("/").collect();
 
@@ -154,13 +158,6 @@ impl RoutePattern {
                 }
             }
         }
-
-        //   let common_part = if replacements.len() > 0 {
-        //       let first_replacement_idx = replacements[0].0;
-        //       parts[..first_replacement_idx].join("/")
-        //   } else {
-        //       route.clone()
-        //   };
 
         Ok(RoutePattern {
             full_route: route,
@@ -183,6 +180,11 @@ impl RoutePattern {
             let replacement = self.replacements.iter().find(|(i, _)| *i == idx);
             if let Some((_, key)) = replacement {
                 params.insert(key.to_string(), part.to_string());
+                continue;
+            }
+
+            if *part != original_parts[idx] {
+                return None;
             }
         }
         Some(params)
