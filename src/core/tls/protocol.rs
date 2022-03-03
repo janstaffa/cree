@@ -1,12 +1,22 @@
-use crate::utils::{join_bytes, Error};
-use crypto::mac::Mac;
-use rand_core::{OsRng, RngCore};
+use std::path::PathBuf;
 
-use super::crypto::{ECCurve, EphemeralPair};
-use super::digest::HmacSha256;
+use crate::utils::join_bytes;
+use bytes::Buf;
+use crypto::digest::Digest;
+use crypto::mac::Mac;
+use crypto::sha2::Sha256;
+use rand_core::{OsRng, RngCore};
+use std::io::{Error, ErrorKind, Read};
+use tokio::fs;
+
+use super::crypto::{ECCurve, EncryptedMessage, EphemeralPair};
+use super::digest::{DigestAlgorithm, HmacSha256};
+use super::signature::{RSASignature, Signature};
 use super::{Certificate, CipherSuite, KeyExchange, TLSExtension, TLSRecord, TLSVersion};
 
 pub struct TLSSession {
+    pub certificate_path: PathBuf,
+    pub private_key_path: PathBuf,
     pub is_encrypted: bool,
     pub server_random: [u8; 32],
     pub client_random: Option<Vec<u8>>,
@@ -20,18 +30,21 @@ pub struct TLSSession {
     pub client_write_iv: Option<Vec<u8>>,
     pub server_write_iv: Option<Vec<u8>>,
     pub handshake_messages: Vec<TLSMessage>,
+    pub handshake_finished: bool,
     pub incoming_encrypted_counter: u64,
     pub outgoing_encrypted_counter: u64,
 }
 
 impl TLSSession {
-    pub fn new() -> TLSSession {
+    pub fn new(certificate_path: PathBuf, private_key_path: PathBuf) -> TLSSession {
         let ephemeral_pair = EphemeralPair::new();
 
         let mut server_random = [0u8; 32];
         OsRng.fill_bytes(&mut server_random);
 
         TLSSession {
+            certificate_path,
+            private_key_path,
             is_encrypted: false,
             server_random,
             client_random: None,
@@ -45,6 +58,7 @@ impl TLSSession {
             client_write_iv: None,
             server_write_iv: None,
             handshake_messages: vec![],
+            handshake_finished: false,
             incoming_encrypted_counter: 0,
             outgoing_encrypted_counter: 0,
         }
@@ -109,10 +123,302 @@ impl TLSSession {
             self.client_write_iv = Some(p[32..36].to_vec());
             self.server_write_iv = Some(p[36..40].to_vec());
         } else {
-            return Err(Error::new("Encryption keys cannot be calculated.", 5003));
+            return Err(Error::new(
+                ErrorKind::Other,
+                "Encryption keys cannot be calculated.",
+            ));
         }
 
         Ok(())
+    }
+
+    pub fn decrypt_message(&mut self, message: TLSMessage) -> Result<TLSMessage, Error> {
+        let decrypted_content = if let (Some(client_write_key), Some(client_write_iv)) =
+            (&self.client_write_key, &self.client_write_iv)
+        {
+            let encryption_iv = [&client_write_iv[..], &message.content[0..8]].concat();
+
+            let data = &message.content[8..];
+
+            let mut aad = self.incoming_encrypted_counter.to_be_bytes().to_vec();
+            aad.push(message.record.get_value());
+            aad.extend(message.version.get_value());
+            aad.extend(((data.len() - 16) as u16).to_be_bytes());
+
+            EncryptedMessage::decrypt(data, &encryption_iv, client_write_key, &aad)?
+        } else {
+            panic!("Invalid handshake order.");
+        };
+
+        self.incoming_encrypted_counter += 1;
+
+        let mut new_message = message;
+        new_message.content = decrypted_content;
+        Ok(new_message)
+    }
+    pub fn encrypt_message(&mut self, message: TLSMessage) -> Result<TLSMessage, Error> {
+        if let (Some(server_write_iv), Some(server_write_key)) =
+            (&self.server_write_iv, &self.server_write_key)
+        {
+            let sequence_number = self.outgoing_encrypted_counter.to_be_bytes();
+            self.outgoing_encrypted_counter += 1;
+            // constructing IV - SERVER_WRITE_IV + sequence number
+            let mut iv = server_write_iv.clone();
+            iv.extend(&sequence_number);
+
+            let data = message.content;
+            // constructing AAD - sequence number + record header
+            let mut aad = sequence_number.to_vec();
+            aad.push(message.record.get_value());
+            aad.extend(message.version.get_value());
+            aad.extend((data.len() as u16).to_be_bytes());
+
+            let encrypted = EncryptedMessage::encrypt(&data, &iv, server_write_key, &aad);
+            let mut data = sequence_number.to_vec();
+            data.extend(encrypted);
+
+            let new_message = TLSMessage::new(message.record, message.version, data);
+            return Ok(new_message);
+        }
+        Err(Error::new(
+            ErrorKind::Other,
+            "Failed to encrypt the message.",
+        ))
+    }
+    pub async fn advance_handshake(&mut self, message: TLSMessage) -> Option<Vec<u8>> {
+        // TLS 1.2 implementation
+        if let TLSRecord::ChangeCipherSpec | TLSRecord::Handshake = message.record {
+            match message.record {
+                TLSRecord::Handshake => {
+                    let handshake_message = HandshakeMessage::parse(&message.content).unwrap();
+
+                    match handshake_message {
+                        HandshakeMessage::ClientHello {
+                            random: client_random,
+                            ..
+                        } => {
+                            self.handshake_messages.push(message);
+
+                            self.client_random = Some(client_random.clone());
+
+                            let mut bulk_write: Vec<u8> = vec![];
+
+                            //
+                            // Server Hello
+                            //
+
+                            let server_hello = HandshakeMessage::ServerHello {
+                                version: TLSVersion::TLS1_2,
+                                cipher_suite: CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+                                random: self.server_random.to_vec(),
+                                session_id: None,
+                                extensions: vec![TLSExtension::new(65281, vec![0])],
+                            };
+
+                            let server_hello_handshake = TLSMessage::new(
+                                TLSRecord::Handshake,
+                                TLSVersion::TLS1_2,
+                                server_hello.get_raw().unwrap(),
+                            );
+                            bulk_write.extend(&server_hello_handshake.get_raw());
+                            self.handshake_messages.push(server_hello_handshake);
+
+                            //
+                            // Server Certificate
+                            //
+
+                            let mut certificates = vec![];
+                            let certificate =
+                                fs::read_to_string(&self.certificate_path).await.unwrap();
+                            let certificate = base64::decode(certificate).unwrap();
+                            certificates.push(Certificate { raw: certificate });
+
+                            let server_certificate =
+                                HandshakeMessage::ServerCertificate { certificates };
+                            let server_certificate_handshake = TLSMessage::new(
+                                TLSRecord::Handshake,
+                                TLSVersion::TLS1_2,
+                                server_certificate.get_raw().unwrap(),
+                            );
+                            bulk_write.extend(&server_certificate_handshake.get_raw());
+                            self.handshake_messages.push(server_certificate_handshake);
+
+                            //
+                            // Server Key Exchange
+                            //
+
+                            let server_key_exchange = HandshakeMessage::ServerKeyExchange {
+                                key_exchange: KeyExchange::ECDHE {
+                                    curve: ECCurve::x25519,
+                                    public_key: self
+                                        .ephemeral_pair
+                                        .public_key()
+                                        .as_bytes()
+                                        .to_vec(),
+                                },
+                            };
+
+                            let mut key_exchange_body =
+                                server_key_exchange.get_raw().unwrap()[4..].to_vec();
+                            // signature
+                            let mut to_sign: Vec<u8> = vec![];
+                            to_sign.extend(&client_random);
+                            to_sign.extend(&self.server_random);
+                            to_sign.extend(&key_exchange_body);
+
+                            // signature
+                            let private_key_der = fs::read(&self.private_key_path).await.unwrap();
+
+                            let signer = RSASignature::new(private_key_der);
+                            let signature = signer.sign(DigestAlgorithm::SHA256, &to_sign).unwrap();
+
+                            let signature_id = match signature.signature_scheme {
+                                Signature::RSA_SHA256 => {
+                                    // assigned RSA with SHA256 signature value
+                                    [0x04, 0x01]
+                                }
+                            };
+                            key_exchange_body.extend(&signature_id);
+                            key_exchange_body.extend(u16::to_be_bytes(signature.data.len() as u16));
+                            key_exchange_body.extend(&signature.data);
+
+                            let mut key_exchange_message = vec![0x0c];
+                            key_exchange_message
+                                .extend(&u32::to_be_bytes(key_exchange_body.len() as u32)[1..]);
+                            key_exchange_message.extend(&key_exchange_body);
+
+                            let server_key_exchange_handshake = TLSMessage::new(
+                                TLSRecord::Handshake,
+                                TLSVersion::TLS1_2,
+                                key_exchange_message,
+                            );
+                            bulk_write.extend(&server_key_exchange_handshake.get_raw());
+                            self.handshake_messages.push(server_key_exchange_handshake);
+
+                            //
+                            // Server Hello Done
+                            //
+                            let server_hello_done = HandshakeMessage::ServerHelloDone;
+
+                            let server_hello_done_handshake = TLSMessage::new(
+                                TLSRecord::Handshake,
+                                TLSVersion::TLS1_2,
+                                server_hello_done.get_raw().unwrap(),
+                            );
+                            bulk_write.extend(&server_hello_done_handshake.get_raw());
+                            self.handshake_messages.push(server_hello_done_handshake);
+
+                            return Some(bulk_write);
+                            //  self.write(&bulk_write).await.unwrap();
+                        }
+                        HandshakeMessage::ClientKeyExchange { public_key, .. } => {
+                            self.handshake_messages.push(message);
+                            let mut buf = [0u8; 32];
+
+                            let mut reader = public_key.reader();
+                            reader.read(&mut buf).unwrap();
+
+                            self.client_public_key = Some(buf);
+                        }
+
+                        HandshakeMessage::HandshakeFinished { verify_data, .. } => {
+                            let mut to_hash: Vec<u8> = vec![];
+                            for message in &self.handshake_messages {
+                                to_hash.extend(&message.content);
+                            }
+
+                            let mut sha256_encryptor = Sha256::new();
+                            sha256_encryptor.input(&to_hash);
+
+                            let mut hash = [0u8; 32];
+                            sha256_encryptor.result(&mut hash);
+
+                            let mut seed = b"client finished".to_vec();
+                            seed.extend(&hash);
+
+                            if let Some(master_secret) = &self.master_secret {
+                                let mut mac = HmacSha256::new(master_secret);
+                                mac.input(&seed);
+                                let a1 = mac.result().code().to_vec();
+                                mac.reset();
+
+                                mac.input(&[a1, seed].concat());
+                                let p1 = mac.result().code().to_vec();
+
+                                let verify_data_check = &p1[..12];
+
+                                assert_eq!(verify_data, verify_data_check);
+                            }
+
+                            self.handshake_messages.push(message);
+
+                            let mut bulk_write = vec![];
+
+                            // Server Change Cipher Spec
+                            let server_change_cipher_spec =
+                                vec![0x14, 0x03, 0x03, 0x00, 0x01, 0x01];
+                            bulk_write.extend(server_change_cipher_spec);
+
+                            if let (Some(master_secret),) = (&self.master_secret,) {
+                                // Server Handshake Finished
+                                let mut to_hash: Vec<u8> = vec![];
+                                for message in &self.handshake_messages {
+                                    to_hash.extend(&message.content);
+                                }
+
+                                let mut sha256_encryptor = Sha256::new();
+                                sha256_encryptor.input(&to_hash);
+
+                                let mut hash = [0u8; 32];
+                                sha256_encryptor.result(&mut hash);
+
+                                let mut seed = b"server finished".to_vec();
+                                seed.extend(&hash);
+                                let mut mac = HmacSha256::new(master_secret);
+                                mac.input(&seed);
+                                let a1 = mac.result().code().to_vec();
+                                mac.reset();
+
+                                mac.input(&[a1, seed].concat());
+                                let p1 = mac.result().code().to_vec();
+
+                                let verify_data = p1[..12].to_vec();
+
+                                let server_handshake_finished =
+                                    HandshakeMessage::HandshakeFinished { verify_data };
+
+                                let server_handshake_finished_record = TLSMessage::new(
+                                    TLSRecord::Handshake,
+                                    TLSVersion::TLS1_2,
+                                    server_handshake_finished.get_raw().unwrap(),
+                                );
+
+                                let encrypted = self
+                                    .encrypt_message(server_handshake_finished_record)
+                                    .unwrap();
+
+                                bulk_write.extend(encrypted.get_raw());
+
+                                //   self.outgoing_encrypted_counter += 1;
+                                self.handshake_finished = true;
+                                return Some(bulk_write);
+                                //   tcp_connection.write(&bulk_write).await.unwrap();
+                            }
+                        }
+
+                        _ => {
+                            // Err(Error::new("Invalid TLS client message.", 5001))
+                        }
+                    };
+                }
+                TLSRecord::ChangeCipherSpec => {
+                    self.calculate_encryption_keys().unwrap();
+                    self.is_encrypted = true;
+                }
+                _ => return None,
+            }
+        }
+        None
     }
 }
 
@@ -208,7 +514,10 @@ impl HandshakeMessage {
                 let mut cipher_suites: Vec<u16> = Vec::new();
 
                 if cipher_suites_length % 2 != 0 {
-                    return Err(Error::new("Invalid ClientHello message", 5001));
+                    return Err(Error::new(
+                        ErrorKind::InvalidInput,
+                        "Invalid ClientHello message",
+                    ));
                 }
 
                 cursor += 2;
@@ -269,7 +578,7 @@ impl HandshakeMessage {
                 //  length: join_bytes(&message_body[0..=2])? as usize,
                 verify_data: message_body[3..].to_vec(),
             }),
-            _ => Err(Error::new("Unknown message type.", 5002)),
+            _ => Err(Error::new(ErrorKind::InvalidInput, "Unknown message type.")),
         }
     }
 
@@ -289,8 +598,8 @@ impl HandshakeMessage {
                 let session_id_length = session_id.as_ref().unwrap_or(&vec![]).len();
                 if session_id_length > u8::MAX as usize {
                     return Err(Error::new(
+                        ErrorKind::InvalidInput,
                         "Provided session ID is too long. (max 255 bytes)",
-                        5004,
                     ));
                 }
                 let extensions_length = extensions
@@ -390,8 +699,8 @@ impl HandshakeMessage {
                         }
                         if public_key.len() > u8::MAX as usize {
                             return Err(Error::new(
+                                ErrorKind::InvalidInput,
                                 "Invalid public key. (max length 255 bytes)",
-                                5004,
                             ));
                         }
 
@@ -441,7 +750,7 @@ impl HandshakeMessage {
 
 pub fn parse_tls_messages(data: &[u8]) -> Result<Vec<TLSMessage>, Error> {
     if data.len() == 0 {
-        return Err(Error::new("Invalid message.", 5001));
+        return Err(Error::new(ErrorKind::InvalidInput, "Invalid message."));
     }
 
     let mut messages: Vec<TLSMessage> = vec![];
@@ -453,7 +762,7 @@ pub fn parse_tls_messages(data: &[u8]) -> Result<Vec<TLSMessage>, Error> {
             0x16 => TLSRecord::Handshake,
             0x17 => TLSRecord::Application,
             0x18 => TLSRecord::Heartbeat,
-            _ => return Err(Error::new("Invalid message", 5001)),
+            _ => return Err(Error::new(ErrorKind::InvalidInput, "Invalid message")),
         };
         let length = join_bytes(&data[(cursor + 3)..=(cursor + 4)])? as usize;
 
@@ -461,7 +770,12 @@ pub fn parse_tls_messages(data: &[u8]) -> Result<Vec<TLSMessage>, Error> {
             [0x03, 0x01] => TLSVersion::TLS1_0,
             [0x03, 0x02] => TLSVersion::TLS1_1,
             [0x03, 0x03] => TLSVersion::TLS1_2,
-            _ => return Err(Error::new("Unsupported TLS version.", 5005)),
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Unsupported,
+                    "Unsupported TLS version.",
+                ))
+            }
         };
         let message = TLSMessage {
             record,

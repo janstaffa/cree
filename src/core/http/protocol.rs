@@ -1,11 +1,12 @@
 use crate::core::http::codes::get_phrase_from_code;
 use crate::core::http::Encoding;
-use crate::utils::Error;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
 use libflate::{deflate::Encoder as DfEncoder, gzip::Encoder as GzEncoder};
 use std::collections::HashMap;
+use std::io::Error;
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
@@ -70,11 +71,11 @@ impl Request {
         // split body and header section
         let parts: Vec<&str> = req.split("\n\n").collect();
         if parts.len() == 0 {
-            return Err(Error::new("Invalid request", 2001));
+            return Err(Error::new(ErrorKind::InvalidInput, "Invalid request"));
         }
         let head: Vec<&str> = parts[0].lines().collect();
         if head.len() < 1 {
-            return Err(Error::new("Invalid request", 2001));
+            return Err(Error::new(ErrorKind::InvalidInput, "Invalid request"));
         }
         let request_line: Vec<&str> = head[0].split_whitespace().collect();
 
@@ -93,7 +94,7 @@ impl Request {
         }
 
         if request_line.len() < 3 {
-            return Err(Error::new("Invalid request.", 2001));
+            return Err(Error::new(ErrorKind::InvalidInput, "Invalid request"));
         }
         let method: Method = match request_line[0] {
             "GET" => Method::GET,
@@ -175,33 +176,26 @@ impl Request {
 type Headers = HashMap<String, String>;
 #[derive(Debug)]
 pub struct Response {
-    write_handle: Arc<Mutex<WriteHalf<TcpStream>>>,
-    req: Request,
+    pub req: Request,
     sent: bool,
+    body: Vec<u8>,
     headers: Headers,
     status: HTTPStatus,
-    use_compression: bool,
-    is_last: bool,
 }
 
 impl Response {
-    pub fn __new(
-        write_handle: Arc<Mutex<WriteHalf<TcpStream>>>,
-        req: Request,
-        use_compression: bool,
-        is_last: bool,
-    ) -> Response {
+    /// Create a new Response based on a request.
+    pub fn new(req: Request) -> Response {
         Response {
-            write_handle,
             req,
             sent: false,
             headers: HashMap::new(),
+            body: Vec::new(),
             status: HTTPStatus::Accepted,
-            use_compression,
-            is_last,
         }
     }
 
+    // Get all headers formated into a string.
     pub fn get_headers(&mut self) -> String {
         let mut headers = String::new();
         for (key, value) in &self.headers {
@@ -216,103 +210,45 @@ impl Response {
         }
         headers
     }
+    /// Get the current body of the request.
+    pub fn get_body(&self) -> &[u8] {
+        &self.body
+    }
+    /// Append data to the request body.
+    pub fn write(&mut self, data: &[u8]) {
+        self.body.extend(data);
+    }
+    /// Get a header by key.
     pub fn get_header(&self, key: &str) -> Option<&String> {
         self.headers.get(key)
     }
+
+    /// Add a new header. If a header with this key already exists, the function updates its value.
     pub fn set_header(&mut self, key: &str, value: &str) {
         self.headers.insert(key.to_owned(), value.to_owned());
     }
+    /// Remove a header by key.
     pub fn remove_header(&mut self, key: &str) {
         self.headers.remove(key);
     }
 
+    /// Get the current HTTP status.
     pub fn get_status(&self) -> &HTTPStatus {
         &self.status
     }
+    /// Set the HTTP status.
+    /// Available statuses:
+    /// - Accepted
+    /// - BadRequest
+    /// - Forbidden
+    /// - MethodNotAllowed
+    /// - NoContent
+    /// - Ok
+    /// - PartialContent
+    /// - RangeNotSatisfiable
+    /// - ServerError
+    /// - Unauthorized
     pub fn set_status(&mut self, status: HTTPStatus) {
         self.status = status;
-    }
-
-    pub async fn send(&mut self, data: &[u8]) -> Result<(), String> {
-        if self.sent {
-            return Err("Cannot write to a response that has already been sent.".into());
-        }
-        self.sent = true;
-
-        // create all headers
-        let status = self.get_status();
-        let code =
-            get_phrase_from_code(&status).ok_or(format!("Invalid status code: {:?}.", status))?;
-        let http_header = format!("HTTP/1.1 {} {}\n", code.0, code.1);
-
-        let date = Utc::now().format("%a, %d %b %Y %T %Z");
-        let date = format!("{}", date);
-        self.set_header("Date", &date);
-
-        let mut connection_status = "keep-alive";
-        if self.is_last {
-            connection_status = "close";
-        }
-        self.set_header("Connection", connection_status);
-
-        let mut body = data.to_vec();
-
-        // use compression if necessary
-        if self.use_compression {
-            let accept_encoding = self.req.headers.get("accept-encoding");
-            if let Some(accept_encoding) = accept_encoding {
-                let accept_encoding: Vec<&str> = accept_encoding.split(",").collect();
-                let accept_encoding: Vec<String> = accept_encoding
-                    .iter()
-                    .map(|&i| i.trim().to_lowercase())
-                    .collect();
-                let has_gzip = accept_encoding.contains(&String::from("gzip"));
-                let has_deflate = accept_encoding.contains(&String::from("deflate"));
-
-                let content = &data;
-                let mut content_encoding: Option<Encoding> = None;
-
-                // Gzip usually increases file size in files with less than 1000 bytes
-                if content.len() > 1000 && has_gzip {
-                    content_encoding = Some(Encoding::Gzip);
-                } else if has_deflate {
-                    content_encoding = Some(Encoding::Deflate);
-                };
-
-                if let Some(content_encoding) = content_encoding {
-                    let (encoded_data, encoding_name) = match content_encoding {
-                        Encoding::Gzip => {
-                            let mut encoder = GzEncoder::new(Vec::new()).unwrap();
-                            std::io::copy(&mut &content[..], &mut encoder).unwrap();
-                            (encoder.finish().into_result().unwrap(), "gzip")
-                        }
-                        Encoding::Deflate => {
-                            let mut encoder = DfEncoder::new(Vec::new());
-                            std::io::copy(&mut &content[..], &mut encoder).unwrap();
-                            (encoder.finish().into_result().unwrap(), "deflate")
-                        }
-                    };
-
-                    self.set_header("Content-Encoding", encoding_name);
-                    body = encoded_data;
-                }
-            }
-        }
-
-        self.set_header("Content-Length", &body.len().to_string());
-
-        let mut headers = [http_header.as_bytes(), self.get_headers().as_bytes()].concat();
-
-        headers.push(0x0A);
-
-        let final_data = match self.req.method {
-            Method::HEAD => headers,
-            _ => [&headers, &body[..]].concat(),
-        };
-
-        let mut connection = self.write_handle.lock().await;
-
-        connection.write_all(&final_data).await.unwrap();
-        Ok(())
     }
 }

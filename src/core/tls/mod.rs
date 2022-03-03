@@ -1,5 +1,6 @@
+use std::io::{Error, ErrorKind};
+
 use self::crypto::ECCurve;
-use crate::utils::Error;
 
 pub mod crypto;
 pub mod digest;
@@ -51,7 +52,7 @@ impl TLSVersion {
     pub fn from(e: &[u8]) -> Result<TLSVersion, Error> {
         Ok(match e {
             &[0x03, 0x03] => TLSVersion::TLS1_2,
-            _ => return Err(Error::new("Invalid TLS version.", 5001)),
+            _ => return Err(Error::new(ErrorKind::InvalidInput, "Invalid TLS version.")),
         })
     }
     pub fn get_value(&self) -> [u8; 2] {

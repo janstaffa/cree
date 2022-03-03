@@ -1,7 +1,8 @@
-use crate::utils::Error;
+use std::io::{Error, ErrorKind};
+
 use crypto::aead::{AeadDecryptor, AeadEncryptor};
+use crypto::aes::KeySize;
 use crypto::aes_gcm::AesGcm;
-use crypto::{aes::KeySize, hmac, sha2};
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::montgomery::MontgomeryPoint;
 use curve25519_dalek::scalar::Scalar;
@@ -77,7 +78,10 @@ impl EncryptedMessage {
         if decrypted {
             Ok(dec)
         } else {
-            Err(Error::new("Failed to decrypt the message.", 5006))
+            Err(Error::new(
+                ErrorKind::Other,
+                "Failed to decrypt the message.",
+            ))
         }
     }
 }
